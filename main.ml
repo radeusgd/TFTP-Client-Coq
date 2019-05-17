@@ -6,8 +6,21 @@ open Bytes
 open List
 open TFTP_Core
 
-let str_to_list (s : string) : char list = []  (* FIXME *)
-let list_to_str (l : char list) : string = ""  (* FIXME *)
+(* explode and implode borrowed from https://github.com/ocaml/ocaml/issues/5367 *)
+let explode s =
+let rec exp i l =
+if i < 0 then l else exp (i - 1) (s.[i] :: l) in
+exp (String.length s - 1) [];;
+
+let implode l =
+let res = String.create (List.length l) in
+let rec imp i = function
+| [] -> res
+| c :: l -> res.[i] <- c; imp (i + 1) l in
+imp 0 l;;
+
+let str_to_list (s : string) : char list = explode s
+let list_to_str (l : char list) : string = implode l
 let fail message = Printf.printf "%s\n" message; exit 1
 
 type transfer_direction = Upload of string | Download of string
@@ -38,7 +51,7 @@ let create_udp_socket (tid : int) : file_descr =
   Unix.bind fd addr;
   fd
 
-type state = TODO of int
+type state = TFTP_Core.state
 type message = bytes
 type action = Send of message * int | Terminate
 type event = Incoming of message * int | Timeout (* TODO should also provide IP? *) (*TODO add terminated event*)
@@ -53,13 +66,10 @@ let initialize_connection (tid : int) (port : int) (transfer : transfer_directio
   let action = match coq_action with
     | Coq_send (msg, port) -> Send (list_to_str msg, port)
     | Coq_terminate -> Terminate in
-  let state = match coq_state with
-    | Coq_todo -> TODO 0 in
-  (action, state)
+  (action, coq_state)
 
 (*TODO connect with Coq*)
 let process_step (event :  event) (state : state) : action * state =
-  let (TODO port) = state in
   match event with
   | Timeout -> (Terminate, state)
   | Incoming (msg, inc_port) -> (Send (msg, inc_port), state)
