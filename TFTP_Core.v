@@ -9,6 +9,14 @@ Import ListNotations.
 Local Open Scope char_scope.
 
 Axiom newline : ascii.
+Axiom hello : list ascii.
+
+Inductive transfer : Set := upload : list ascii -> transfer | download : list ascii -> transfer.
+Inductive action : Set := send : list ascii -> Z -> action | terminate : action.
+Inductive state : Set := todo : state.
+
+Inductive result : Set := makeresult : action -> state -> result.
+
 
 Definition incr1 (x : Z): Z :=
   (x + 1).
@@ -18,6 +26,15 @@ intros.
 unfold incr1.
 omega.
 Qed.
+
+Definition tst (x: ascii): ascii := x.
+
+Definition tst2 (x: list ascii): list ascii := x.
+
+Definition make_upload (name: list ascii): transfer := upload name.
+
+Definition initialize (tid : Z) (port : Z) (t : transfer) : result :=
+  makeresult (send hello port) (todo).
 
 (*Record uniq_state_info := mkgst {
     cur_line : String.string;
