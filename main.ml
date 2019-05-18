@@ -1,23 +1,23 @@
 open Unix
 open Arg
 open Random
-open String
 open Bytes
 open List
 open TFTP_Core
 
+
 (* explode and implode borrowed from https://github.com/ocaml/ocaml/issues/5367 *)
 let explode s =
-let rec exp i l =
-if i < 0 then l else exp (i - 1) (s.[i] :: l) in
-exp (String.length s - 1) [];;
+  let rec exp i l =
+  if i < 0 then l else exp (i - 1) (s.[i] :: l) in
+  exp (Bytes.length s - 1) []
 
 let implode l =
-let res = String.create (List.length l) in
-let rec imp i = function
-| [] -> res
-| c :: l -> res.[i] <- c; imp (i + 1) l in
-imp 0 l;;
+  let res = Bytes.create (List.length l) in
+  let rec imp i = function
+  | [] -> res
+  | c :: l -> Bytes.set res i c; imp (i + 1) l in
+  imp 0 l
 
 let str_to_list (s : string) : char list = explode s
 let list_to_str (l : char list) : string = implode l
@@ -56,23 +56,24 @@ type message = bytes
 type action = Send of message * int | Terminate
 type event = Incoming of message * int | Timeout (* TODO should also provide IP? *) (*TODO add terminated event*)
 
-(* TODO these two functions should call the Coq core *)
-let initialize_connection (tid : int) (port : int) (transfer : transfer_direction) : action * state =
-  let tr = match transfer with
-    | Upload fname -> TFTP_Core.Coq_upload (str_to_list fname)
-    | Download fname -> TFTP_Core.Coq_download (str_to_list fname)
-  in
-  let TFTP_Core.Coq_makeresult (coq_action, coq_state) = TFTP_Core.initialize tid port tr in
+let translate_coq_result (coq_action, coq_state) : action * state =
   let action = match coq_action with
     | Coq_send (msg, port) -> Send (list_to_str msg, port)
     | Coq_terminate -> Terminate in
   (action, coq_state)
 
-(*TODO connect with Coq*)
+let initialize_connection (tid : int) (port : int) (transfer : transfer_direction) : action * state =
+  let coq_transfer = match transfer with
+    | Upload fname -> TFTP_Core.Coq_upload (str_to_list fname)
+    | Download fname -> TFTP_Core.Coq_download (str_to_list fname)
+  in
+  translate_coq_result (TFTP_Core.initialize tid port coq_transfer)
+
 let process_step (event :  event) (state : state) : action * state =
-  match event with
-  | Timeout -> (Terminate, state)
-  | Incoming (msg, inc_port) -> (Send (msg, inc_port), state)
+  let coq_event = match event with
+    | Incoming (msg, sender) -> TFTP_Core.Coq_incoming (str_to_list msg, sender)
+    | Timeout -> TFTP_Core.Coq_timeout in
+  translate_coq_result (TFTP_Core.process_step coq_event state)
 
 let max_packet_len = 600
 
@@ -91,15 +92,22 @@ let main =
       Printf.printf "sending '%s'\n%!" (Bytes.to_string msg);
       let toaddr = make_addr port in
       let sent = Unix.sendto fd msg 0 (Bytes.length msg) [] toaddr in
+      if sent <> Bytes.length msg then Printf.printf "Warning: message has not been sent whole, shouldn't ever happen with UDP! Sent %d/%d bytes" sent (Bytes.length msg);
       Printf.printf "waiting for reply\n%!";
       let buf = Bytes.create max_packet_len in
       try
-        let (recvd, ADDR_INET (fromip, fromport)) = Unix.recvfrom fd buf 0 max_packet_len [] in
-        if recvd <= 0 then (* TODO this is not a timeout but terminated conn *)
-          loop (process_step Timeout state)
-        else
-          (Printf.printf "received '%s'\n%!" (Bytes.to_string buf);
-          loop (process_step (Incoming (Bytes.sub buf 0 recvd, fromport)) state))
-      with Unix.Unix_error (Unix.EAGAIN, "recvfrom", _) -> loop (process_step Timeout state)
+        let (recvd, sender) = Unix.recvfrom fd buf 0 max_packet_len [] in
+        match sender with
+        | ADDR_UNIX _ -> fail "Did not expect a UNIX message on UDP socket!"
+        | ADDR_INET (fromip, fromport) ->
+          if recvd <= 0 then (* TODO this is not a timeout but terminated conn *)
+            (Printf.printf "Receive error\n%!";
+            loop (process_step Timeout state))
+          else
+            (Printf.printf "received '%s'\n%!" (Bytes.to_string buf);
+            loop (process_step (Incoming (Bytes.sub buf 0 recvd, fromport)) state))
+      with Unix.Unix_error (Unix.EAGAIN, "recvfrom", _) ->
+        Printf.printf "Timed out\n%!";
+        loop (process_step Timeout state)
   in
   loop (initialize_connection tid port transfer)
