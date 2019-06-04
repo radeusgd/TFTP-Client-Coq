@@ -53,26 +53,31 @@ let create_udp_socket (tid : int) : file_descr =
 
 type state = TFTP_Core.state
 type message = bytes
-type action = Send of message * int | Terminate | Continue
+type action = Send of message * int | Terminate
 type event = Incoming of message * int | Timeout (* TODO should also provide IP? *) (*TODO add terminated event*)
 
-let translate_coq_result (coq_state, coq_action) : action * state =
-  let action = match coq_action with
+let translate_coq_result' (coq_state) : (action list) * state =
+  let translate_action coq_action = match coq_action with
     | Coq_send (msg, port) -> Send (list_to_str msg, port)
     | Coq_terminate -> Terminate
-    | Coq_continue -> Continue
   in
-  (action, coq_state)
+  let acts = map translate_action (coq_state.actions) in
+  (acts, { coq_state with actions = [] })
 
-let initialize_connection (tid : int) (port : int) (transfer : transfer_direction) : action * state =
+let translate_coq_result (coq_state, result) : (action list) * state =
+  match result with
+  | Some () -> translate_coq_result' coq_state
+  | None -> fail "Error, terminating"
+
+let initialize_connection (tid : int) (port : int) (transfer : transfer_direction) : (action list) * state =
   let coq_transfer = match transfer with
     | Upload fname -> fail "Upload is not implemented"
     | Download fname -> str_to_list fname
   in
   (* let init_state = TFTP_Core.initial_state in *)
-  translate_coq_result (TFTP_Core.initialize tid port coq_transfer)
+  translate_coq_result' (TFTP_Core.initialize tid port coq_transfer)
 
-let process_step (event :  event) (state : state) : action * state =
+let process_step (event :  event) (state : state) : (action list) * state =
   let coq_event = match event with
     | Incoming (msg, sender) -> TFTP_Core.Coq_incoming (str_to_list msg, sender)
     | Timeout -> TFTP_Core.Coq_timeout in
@@ -88,6 +93,15 @@ let main =
   Printf.eprintf "Connecting to %s:%d, my tid is %d\n%!" ip port tid;
   let fd = create_udp_socket tid in
   let make_addr port = ADDR_INET ((inet_addr_of_string ip), port) in
+  let handle_action action =
+    match action with
+    | Terminate -> Printf.eprintf "quitting\n"; exit 0
+    | Send (msg, port) ->
+      Printf.eprintf "sending '%s' to %d\n%!" (escaped (Bytes.to_string msg)) port;
+      let toaddr = make_addr port in
+      let sent = Unix.sendto fd msg 0 (Bytes.length msg) [] toaddr in
+      if sent <> Bytes.length msg then Printf.eprintf "Warning: message has not been sent whole, shouldn't ever happen with UDP! Sent %d/%d bytes" sent (Bytes.length msg)
+  in
   let rec
     receive state =
       Printf.eprintf "waiting for reply\n%!";
@@ -106,16 +120,8 @@ let main =
       with Unix.Unix_error (Unix.EAGAIN, "recvfrom", _) ->
         Printf.eprintf "Timed out\n%!";
         loop (process_step Timeout state)
-    and
-    loop (action, state) =
-    match action with
-    | Continue -> receive state
-    | Terminate -> Printf.eprintf "quitting\n"; exit 0
-    | Send (msg, port) ->
-      Printf.eprintf "sending '%s' to %d\n%!" (escaped (Bytes.to_string msg)) port;
-      let toaddr = make_addr port in
-      let sent = Unix.sendto fd msg 0 (Bytes.length msg) [] toaddr in
-      if sent <> Bytes.length msg then Printf.eprintf "Warning: message has not been sent whole, shouldn't ever happen with UDP! Sent %d/%d bytes" sent (Bytes.length msg);
-      receive state
+  and
+    loop (actions, state) =
+      map handle_action actions; receive state
   in
   loop (initialize_connection tid port transfer)
