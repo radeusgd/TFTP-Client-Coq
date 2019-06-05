@@ -155,10 +155,15 @@ Section mspec_Bind.
 End mspec_Bind.
 *)
 
+Inductive ErrorCode : Set :=
+| NotDefined
+| NoSuchUser.
+
+
 Inductive TFTPMessage : Set
   := RRQ (filename : string)
    | WRQ (filename : string)
-   | ERROR (code : N) (message : string)
+   | ERROR (code : ErrorCode) (message : string)
    | DATA (block : N) (data : string)
    | ACK (block : N).
 
@@ -228,7 +233,17 @@ Definition Deserialize (data : string) : option TFTPMessage :=
     Some (RRQ (fst fxr))
   | 2 =>
     fxr <- ParseNullTerminatedString rest;
-    Some (WRQ (fst fxr))
+      Some (WRQ (fst fxr))
+  | 3 =>
+    blockid <- Get_2b_N rest;
+      Some (DATA blockid (drop 2 rest))
+  | 4 =>
+    blockid <- Get_2b_N rest;
+      Some (ACK blockid)
+  | 5 =>
+    code <- Get_2b_N rest;
+      mxr <- ParseNullTerminatedString (drop 2 rest);
+      Some (ERROR code (fst mxr))
   | _ => None
   end.
 
