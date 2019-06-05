@@ -167,100 +167,98 @@ Inductive TFTPMessage : Set
    | DATA (block : N) (data : string)
    | ACK (block : N).
 
-Definition TestExp (msg: N) : N := msg.
-Module Export TestExp.
-Definition Get2bN (msg : message) : option N :=
+Definition Get_2b_N (msg : message) : option N :=
   match msg with
   | String a (String b _) => Some ( (256 * (N_of_ascii a) + (N_of_ascii b)))
   | _ => None
   end.
 
-Definition Nto2b (n : N) : message :=
+Definition N_to_2b (n : N) : message :=
   String (ascii_of_N (n / 256)) (String (ascii_of_N (n mod 256)) EmptyString).
 
-(* Definition null : string := String zero EmptyString. *)
+Definition null : string := String zero EmptyString.
 
-(* Definition Serialize (msg : TFTPMessage) : string := *)
-(*   match msg with *)
-(*     | RRQ filename => (N_to_2b 1) ++ filename ++ null ++ "octet" ++ null *)
-(*     | WRQ filename => (N_to_2b 2) ++ filename ++ null ++ "octet" ++ null *)
-(*     | DATA block data => (N_to_2b 3) ++ (N_to_2b block) ++ data *)
-(*     | ACK block => (N_to_2b 4) ++ (N_to_2b block) *)
-(*     | ERROR code message => (N_to_2b 5) ++ (N_to_2b code) ++ message ++ null *)
-(*                     end. *)
+Definition Serialize (msg : TFTPMessage) : string :=
+  match msg with
+    | RRQ filename => (N_to_2b 1) ++ filename ++ null ++ "octet" ++ null
+    | WRQ filename => (N_to_2b 2) ++ filename ++ null ++ "octet" ++ null
+    | DATA block data => (N_to_2b 3) ++ (N_to_2b block) ++ data
+    | ACK block => (N_to_2b 4) ++ (N_to_2b block)
+    | ERROR code message => (N_to_2b 5) ++ (N_to_2b code) ++ message ++ null
+                    end.
 
-(* (* TODO *) *)
-(* Definition Deserialize (data : string) : option TFTPMessage := *)
-(*   None. *)
-
-
-(* Definition ParseMessage (msg : message) : serverM TFTPMessage := LiftOption (Deserialize msg). *)
-(* Definition Send (msg : TFTPMessage) (to : N) : serverM unit := *)
-(*   Send' (Serialize msg) to. *)
-
-(* (* Definition get_message_id (msg : message) : option nat := get_2b_int msg. *) *)
-
-(* Fixpoint drop (n: nat) (l : string) : string := match (n, l) with *)
-(*   | (O, l) => l *)
-(*   | (_, EmptyString) => EmptyString *)
-(*   | (S k, String _ t) => drop k t *)
-(*   end. *)
-
-(* Definition get_block_id (msg : message) : option N := Get_2b_N (drop 2 msg). *)
+(* TODO *)
+Definition Deserialize (data : string) : option TFTPMessage :=
+  None.
 
 
+Definition ParseMessage (msg : message) : serverM TFTPMessage := LiftOption (Deserialize msg).
+Definition Send (msg : TFTPMessage) (to : N) : serverM unit :=
+  Send' (Serialize msg) to.
 
-(* (* Definition make_RRQ (filename: string) : message := *) *)
-(* (*   concat [[zero; ascii_of_nat opRRQ]; filename; [zero]; ["o"; "c"; "t"; "e"; "t"]; [zero]]. *) *)
+(* Definition get_message_id (msg : message) : option nat := get_2b_int msg. *)
 
-(* Definition initialize (tid : N) (port : N) (f : string): state := *)
-(*   (mkState waiting_for_init_ack (None) tid [send (Serialize (RRQ f)) port]). *)
+Fixpoint drop (n: nat) (l : string) : string := match (n, l) with
+  | (O, l) => l
+  | (_, EmptyString) => EmptyString
+  | (S k, String _ t) => drop k t
+  end.
 
-(* (* Definition make_ACK (blockid : nat) : message := *) *)
-(* (*   concat [nat_to_2b opACK; nat_to_2b blockid]. *) *)
+Definition get_block_id (msg : message) : option N := Get_2b_N (drop 2 msg).
 
-(* (* Definition make_ERROR (errid : nat) : message := *) *)
-(* (*   concat [nat_to_2b opERROR; nat_to_2b errid; [zero]]. *) *)
 
-(* (* Definition get_data : message -> string := drop 4. *) *)
 
-(* (* Definition data_length (msg : message) : nat := length (get_data msg). *) *)
+(* Definition make_RRQ (filename: string) : message := *)
+(*   concat [[zero; ascii_of_nat opRRQ]; filename; [zero]; ["o"; "c"; "t"; "e"; "t"]; [zero]]. *)
 
-(* Definition handle_incoming_data (sender : N) (blockid : N) (data : string) : serverM unit := *)
-(*   (* TODO write data to file *) *)
-(*   SetFSM (waiting_for_next_packet sender (blockid + 1));; *)
-(*   (if N.of_nat (String.length data) <? 512 then *)
-(*     (* this was the last block, finish up *) *)
-(*     SetFSM finished *)
-(*   else *)
-(*     Return tt);; *)
-(*   Send (ACK blockid) sender. *)
+Definition initialize (tid : N) (port : N) (f : string): state :=
+  (mkState waiting_for_init_ack (None) tid [send (Serialize (RRQ f)) port]).
 
-(* Definition process_step (event : input_event) : serverM unit := *)
-(*   match event with *)
-(*   | incoming msg sender => *)
-(*     tftpmsg <- ParseMessage msg; *)
-(*     st <- GetFSM; *)
-(*     match st with *)
-(*     | waiting_for_init_ack => match tftpmsg with *)
-(*       | DATA 1 data => handle_incoming_data sender 1 data *)
-(*       | _ => Fail unit *)
-(*       end *)
-(*     | errored => Fail unit (* TODO ? *) *)
-(*     | waiting_for_next_packet sendertid expectedblockid => *)
-(*        if N.eqb sender sendertid then (* check if we received the message from the server or somewhere else and if the source is incorrect, send an error and continue *) *)
-(*          match tftpmsg with *)
-(*          | DATA incomingblockid data => *)
-(*            if incomingblockid =? expectedblockid then *)
-(*              handle_incoming_data sender incomingblockid data *)
-(*            else if incomingblockid <? expectedblockid then *)
-(*              Return tt (* probably earlier block has been retransmitted, so we ignore it *) *)
-(*            else *)
-(*              Fail unit (* received a future block id, but this shouldn't happen in interleaved DATA-ACK scheme, so it must be an error *) *)
-(*            | _ => Fail unit *)
-(*          end *)
-(*        else Send (ERROR 5 "Unknown transfer ID") sender *)
-(*     | finished => Fail unit (* TODO *) *)
-(*     end *)
-(*   | timeout => Fail unit (* TODO *) *)
-(*   end. *)
+(* Definition make_ACK (blockid : nat) : message := *)
+(*   concat [nat_to_2b opACK; nat_to_2b blockid]. *)
+
+(* Definition make_ERROR (errid : nat) : message := *)
+(*   concat [nat_to_2b opERROR; nat_to_2b errid; [zero]]. *)
+
+(* Definition get_data : message -> string := drop 4. *)
+
+(* Definition data_length (msg : message) : nat := length (get_data msg). *)
+
+Definition handle_incoming_data (sender : N) (blockid : N) (data : string) : serverM unit :=
+  (* TODO write data to file *)
+  SetFSM (waiting_for_next_packet sender (blockid + 1));;
+  (if N.of_nat (String.length data) <? 512 then
+    (* this was the last block, finish up *)
+    SetFSM finished
+  else
+    Return tt);;
+  Send (ACK blockid) sender.
+
+Definition process_step (event : input_event) : serverM unit :=
+  match event with
+  | incoming msg sender =>
+    tftpmsg <- ParseMessage msg;
+    st <- GetFSM;
+    match st with
+    | waiting_for_init_ack => match tftpmsg with
+      | DATA 1 data => handle_incoming_data sender 1 data
+      | _ => Fail unit
+      end
+    | errored => Fail unit (* TODO ? *)
+    | waiting_for_next_packet sendertid expectedblockid =>
+       if N.eqb sender sendertid then (* check if we received the message from the server or somewhere else and if the source is incorrect, send an error and continue *)
+         match tftpmsg with
+         | DATA incomingblockid data =>
+           if incomingblockid =? expectedblockid then
+             handle_incoming_data sender incomingblockid data
+           else if incomingblockid <? expectedblockid then
+             Return tt (* probably earlier block has been retransmitted, so we ignore it *)
+           else
+             Fail unit (* received a future block id, but this shouldn't happen in interleaved DATA-ACK scheme, so it must be an error *)
+           | _ => Fail unit
+         end
+       else Send (ERROR 5 "Unknown transfer ID") sender
+    | finished => Fail unit (* TODO *)
+    end
+  | timeout => Fail unit (* TODO *)
+  end.

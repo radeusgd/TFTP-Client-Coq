@@ -16,10 +16,9 @@ Local Open Scope N_scope.
 
 Require Import TFTP_Core.
 
-Search "Serialize".
-Theorem N_2b_correctness1 : forall x:N, (x < 256*256) -> Get2bN (Nto2b x) = Some x.
+Theorem N_2b_correctness1 : forall x:N, (x < 256*256) -> Get_2b_N (N_to_2b x) = Some x.
   intros.
-  unfold N_to_2b, get_2b_N.
+  unfold N_to_2b, Get_2b_N.
   f_equal.
   assert (N_of_ascii
             (ascii_of_N (x / 256)) = x / 256).
