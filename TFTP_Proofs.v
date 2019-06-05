@@ -38,9 +38,18 @@ Theorem N_2b_correctness1 : forall x:N, (x < 256*256) -> Get_2b_N (N_to_2b x) = 
            **** zify; omega.
 Qed.
 
+Lemma ParseNullTerminatedStringCorrectness : forall pref : string, forall rest : string, ParseNullTerminatedString (pref ++ String zero rest) = Some (pref, rest).
+  admit.
+
+Admitted.
+
 Theorem SerializationCorrectness : forall m : TFTPMessage, Deserialize (Serialize m) = Some m.
   intros.
-  unfold Serialize.
-  unfold Deserialize.
+  induction m; unfold Serialize; unfold Deserialize; simpl.
+  * unfold OptBind.
+    rewrite -> ParseNullTerminatedStringCorrectness.
+    simpl.
+    trivial.
+  
   admit.
 Admitted. (* TODO *)

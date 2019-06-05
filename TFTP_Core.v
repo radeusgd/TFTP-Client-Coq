@@ -1,9 +1,9 @@
 Require Import ZArith.
 Require Import Coq.Strings.String.
 Require Import ZArith.BinInt.
-Require Import Ascii.
+Require Import Coq.Strings.Ascii.
 Require Import List.
-Require String.
+Require Import String.
 Require Import Coq.Numbers.Natural.Abstract.NDiv.
 
 (* Require Import Binding. *)
@@ -11,11 +11,6 @@ Set Implicit Arguments.
 
 Import ListNotations.
 
-Local Open Scope char_scope.
-Local Open Scope N_scope.
-
-Axiom newline : ascii.
-Definition hello := ["h"; "i"].
 
 Definition message : Set := string.
 Inductive transfer : Set := upload : message -> transfer | download : message -> transfer.
@@ -167,6 +162,8 @@ Inductive TFTPMessage : Set
    | DATA (block : N) (data : string)
    | ACK (block : N).
 
+Local Open Scope N_scope.
+Local Open Scope char_scope.
 Definition Get_2b_N (msg : message) : option N :=
   match msg with
   | String a (String b _) => Some ( (256 * (N_of_ascii a) + (N_of_ascii b)))
@@ -176,7 +173,14 @@ Definition Get_2b_N (msg : message) : option N :=
 Definition N_to_2b (n : N) : message :=
   String (ascii_of_N (n / 256)) (String (ascii_of_N (n mod 256)) EmptyString).
 
+
 Definition null : string := String zero EmptyString.
+
+Fixpoint drop (n: nat) (l : string) : string := match (n, l) with
+  | (O, l) => l
+  | (_, EmptyString) => EmptyString
+  | (S k, String _ t) => drop k t
+  end.
 
 Definition Serialize (msg : TFTPMessage) : string :=
   match msg with
@@ -185,11 +189,48 @@ Definition Serialize (msg : TFTPMessage) : string :=
     | DATA block data => (N_to_2b 3) ++ (N_to_2b block) ++ data
     | ACK block => (N_to_2b 4) ++ (N_to_2b block)
     | ERROR code message => (N_to_2b 5) ++ (N_to_2b code) ++ message ++ null
-                    end.
+  end.
+
+Fixpoint StrFromList (l : list ascii) : string :=
+  match l with
+  | h :: t => String h (StrFromList t)
+  | [] => EmptyString
+  end.
+
+Require Import Bool.
+Definition eq_ascii (a1 a2 : ascii) :=
+  match a1, a2 with
+  | Ascii b1 b2 b3 b4 b5 b6 b7 b8, Ascii c1 c2 c3 c4 c5 c6 c7 c8 =>
+    (eqb b1 c1) && (eqb b2 c2) && (eqb b3 c3) && (eqb b4 c4) &&
+    (eqb b5 c5) && (eqb b6 c6) && (eqb b7 c7) && (eqb b8 c8)
+  end.
+
+Fixpoint parseNullTerminatedHelper (data : string) (acc : list ascii) : option (string * string) :=
+  match data with
+  | String a rest =>
+    if eq_ascii a zero then
+      Some (StrFromList (rev acc), rest) (*TODO*)
+    else
+      parseNullTerminatedHelper rest (a :: acc)
+  | EmptyString => None
+  end.
+(* parses first part of data until a null character and returns it as the first argument and the rest of data as the second one *)
+Definition ParseNullTerminatedString (data : string) : option (string * string) :=
+  parseNullTerminatedHelper data [].
 
 (* TODO *)
 Definition Deserialize (data : string) : option TFTPMessage :=
-  None.
+  msgid <- Get_2b_N data;
+  let rest := drop 2 data in
+  match msgid with
+  | 1 =>
+    fxr <- ParseNullTerminatedString rest;
+    Some (RRQ (fst fxr))
+  | 2 =>
+    fxr <- ParseNullTerminatedString rest;
+    Some (WRQ (fst fxr))
+  | _ => None
+  end.
 
 
 Definition ParseMessage (msg : message) : serverM TFTPMessage := LiftOption (Deserialize msg).
@@ -197,12 +238,6 @@ Definition Send (msg : TFTPMessage) (to : N) : serverM unit :=
   Send' (Serialize msg) to.
 
 (* Definition get_message_id (msg : message) : option nat := get_2b_int msg. *)
-
-Fixpoint drop (n: nat) (l : string) : string := match (n, l) with
-  | (O, l) => l
-  | (_, EmptyString) => EmptyString
-  | (S k, String _ t) => drop k t
-  end.
 
 Definition get_block_id (msg : message) : option N := Get_2b_N (drop 2 msg).
 

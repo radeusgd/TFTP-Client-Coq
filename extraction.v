@@ -7,7 +7,7 @@ Require Import ExtrOcamlZInt.
 Extraction Blacklist String Int List Nat.
 
 (* tak można wstawiać ocamlowy kod do aksjomatów *)
-Extract Constant TFTP_Core.newline => "'\n'".
+(* Extract Constant TFTP_Core.newline => "'\n'". *)
 (* Extract Constant TFTP_Core.hello => "['a';'b';'c']". *)
 
 Separate Extraction
