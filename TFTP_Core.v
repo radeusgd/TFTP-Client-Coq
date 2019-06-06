@@ -157,8 +157,24 @@ End mspec_Bind.
 
 Inductive ErrorCode : Set :=
 | NotDefined
+| UnknownTransferId
 | NoSuchUser.
 
+Local Open Scope N_scope.
+Definition SerializeErrorCode (ec : ErrorCode) : N :=
+  match ec with
+  | NotDefined => 0
+  | UnknownTransferId => 5
+  | NoSuchUser => 7
+  end.
+
+Definition DeserializeErrorCode (x : N) : option ErrorCode :=
+  match x with
+  | 0 => Some NotDefined
+  | 5 => Some UnknownTransferId
+  | 7 => Some NoSuchUser
+  | _ => None
+  end.
 
 Inductive TFTPMessage : Set
   := RRQ (filename : string)
@@ -171,13 +187,12 @@ Local Open Scope N_scope.
 Local Open Scope char_scope.
 Definition Get_2b_N (msg : message) : option N :=
   match msg with
-  | String a (String b _) => Some ( (256 * (N_of_ascii a) + (N_of_ascii b)))
+  | String a (String b _) => Some ( (256%N * (N_of_ascii a) + (N_of_ascii b)))
   | _ => None
   end.
 
 Definition N_to_2b (n : N) : message :=
   String (ascii_of_N (n / 256)) (String (ascii_of_N (n mod 256)) EmptyString).
-
 
 Definition null : string := String zero EmptyString.
 
@@ -193,7 +208,7 @@ Definition Serialize (msg : TFTPMessage) : string :=
     | WRQ filename => (N_to_2b 2) ++ filename ++ null ++ "octet" ++ null
     | DATA block data => (N_to_2b 3) ++ (N_to_2b block) ++ data
     | ACK block => (N_to_2b 4) ++ (N_to_2b block)
-    | ERROR code message => (N_to_2b 5) ++ (N_to_2b code) ++ message ++ null
+    | ERROR code message => (N_to_2b 5) ++ (N_to_2b (SerializeErrorCode code)) ++ message ++ null
   end.
 
 Fixpoint StrFromList (l : list ascii) : string :=
@@ -223,7 +238,6 @@ Fixpoint parseNullTerminatedHelper (data : string) (acc : list ascii) : option (
 Definition ParseNullTerminatedString (data : string) : option (string * string) :=
   parseNullTerminatedHelper data [].
 
-(* TODO *)
 Definition Deserialize (data : string) : option TFTPMessage :=
   msgid <- Get_2b_N data;
   let rest := drop 2 data in
@@ -243,7 +257,8 @@ Definition Deserialize (data : string) : option TFTPMessage :=
   | 5 =>
     code <- Get_2b_N rest;
       mxr <- ParseNullTerminatedString (drop 2 rest);
-      Some (ERROR code (fst mxr))
+      ec <- DeserializeErrorCode code;
+      Some (ERROR ec (fst mxr))
   | _ => None
   end.
 
@@ -307,7 +322,7 @@ Definition process_step (event : input_event) : serverM unit :=
              Fail unit (* received a future block id, but this shouldn't happen in interleaved DATA-ACK scheme, so it must be an error *)
            | _ => Fail unit
          end
-       else Send (ERROR 5 "Unknown transfer ID") sender
+       else Send (ERROR UnknownTransferId "Unknown transfer ID") sender
     | finished => Fail unit (* TODO *)
     end
   | timeout => Fail unit (* TODO *)
