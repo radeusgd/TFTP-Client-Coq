@@ -147,14 +147,6 @@ Theorem SerializationCorrectness2 : forall f : string, Deserialize (Serialize (W
   trivial.
 Qed.
 
-Definition f (x : N) : N := match x
-           with
-           | 0 => 0
-           | N.pos q => N.pos q~0~0~0~0~0~0~0~0
-                            end.
-
-Compute f 4.
-
 Lemma N_rev_mul : forall x:N,
     (match x with
      | 0 => 0
@@ -221,4 +213,34 @@ Theorem SerializationCorrectness3 : forall c:ErrorCode, forall m:string, Deseria
   * remember (SerializeErrorCode c) as q.
     destruct Heqq.
     apply div_lemma1. assumption.
+Qed.
+
+Theorem SerializationCorrectness4 : forall b:N, forall m:string, b < 256*256 -> Deserialize (Serialize (DATA b m)) = Some (DATA b m).
+  intros.
+  unfold Serialize; unfold Deserialize.
+  unfold OptBind.
+  cbn.
+  repeat rewrite -> N_ascii_embedding.
+  rewrite -> N_2b_correctness4.
+  trivial.
+
+  apply N.mod_upper_bound.
+  zify;omega.
+
+  apply div_lemma1. assumption.
+Qed.
+
+Theorem SerializationCorrectness5 : forall b:N, b < 256*256 -> Deserialize (Serialize (ACK b)) = Some (ACK b).
+  intros.
+  unfold Serialize; unfold Deserialize.
+  unfold OptBind.
+  cbn.
+  repeat rewrite -> N_ascii_embedding.
+  rewrite -> N_2b_correctness4.
+  trivial.
+
+  apply N.mod_upper_bound.
+  zify;omega.
+
+  apply div_lemma1. assumption.
 Qed.
