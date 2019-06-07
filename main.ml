@@ -55,6 +55,7 @@ type state = TFTP_Core.state
 type message = bytes
 type action
   = Send of message * int
+  | Print of string (* these are used mainly for debugging *)
   | RequestRead
   | Write of bytes
   | Terminate
@@ -67,6 +68,7 @@ let translate_coq_result' (coq_state) : (action list) * state =
   let translate_action coq_action = match coq_action with
     | Coq_send (msg, port) -> Send (list_to_str msg, port)
     | Coq_write msg -> Write (list_to_str msg)
+    | Coq_print msg -> Print (list_to_str msg)
     | Coq_request_read -> RequestRead
     | Coq_terminate -> Terminate
   in
@@ -95,6 +97,11 @@ let max_packet_len = 600
 
 let data_len = 512
 
+let sock_send sockfd toaddr msg =
+  let sent = Unix.sendto sockfd msg 0 (Bytes.length msg) [] toaddr in
+  if sent <> Bytes.length msg then Printf.eprintf "Warning: message has not been sent whole, shouldn't ever happen with UDP! Sent %d/%d bytes" sent (Bytes.length msg)
+
+
 let main =
   Random.self_init(); (* initialize randomness *)
   Printf.eprintf "hello world\n";
@@ -120,11 +127,11 @@ let main =
       Unix.write filefd data 0 (Bytes.length data);
       false
     | RequestRead -> true
+    | Print msg -> Printf.printf "%s\n%!" msg; false
     | Send (msg, port) ->
       Printf.eprintf "sending '%s' to %d\n%!" (escaped (Bytes.to_string msg)) port;
       let toaddr = make_addr port in
-      let sent = Unix.sendto sockfd msg 0 (Bytes.length msg) [] toaddr in
-      if sent <> Bytes.length msg then Printf.eprintf "Warning: message has not been sent whole, shouldn't ever happen with UDP! Sent %d/%d bytes" sent (Bytes.length msg);
+      sock_send sockfd toaddr msg;
       false
   in
   let rec
@@ -161,7 +168,8 @@ let main =
     read_helper 0
   and
     loop (actions, state) =
-    let want_to_read = map handle_action actions in
+    (* actions are reversed because they're appended to front on Coq side*)
+    let want_to_read = map handle_action (List.rev actions) in
     if List.mem true want_to_read then (* if any action made us want to read from file *)
       read_file state
     else (* otherwise go by default - wait for packets on the network *)

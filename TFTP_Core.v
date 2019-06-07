@@ -17,14 +17,14 @@ Definition message : Set := string.
 Inductive action : Set :=
 | send : message -> N -> action
 | write : message -> action
+| print : string -> action
 | request_read : action
 | terminate : action.
 
 Inductive protocol_state : Set :=
 | waiting_for_init_ack
-| errored
 | waiting_for_next_packet (sendertid : N) (blockid : N)
-| finished.
+| waiting_for_read (sendertid : N) (blockid : N).
 
 Record state : Set := mkState
  { fsm : protocol_state
@@ -44,26 +44,6 @@ Definition serverM (ret : Set) := state -> state * option ret.
 
 Definition Return (T : Set) (v : T) : serverM T :=
   fun m => (m, Some v).
-
-(*  operations on state *)
-Definition GetFSM : serverM protocol_state :=
-  fun m => (m, Some (fsm m)).
-
-Definition SetFSM (s : protocol_state) : serverM unit :=
-  fun m => (mkState s (previousMessage m) (mytid m) (actions m), Some tt).
-
-Definition DoAction (a : action) : serverM unit :=
-  fun m => (mkState (fsm m) (previousMessage m) (mytid m) (a :: actions m), Some tt).
-
-Definition Send' (msg : message) (to : N) : serverM unit :=
-  DoAction (send msg to).
-
-Definition Write (data : string) : serverM unit := DoAction (write data).
-
-Definition Fail (T : Set) : serverM T := fun m => (m, None).
-Definition Terminate : serverM unit := DoAction terminate.
-
-Definition LiftOption (T : Set) (may : option T) : serverM T := fun m => (m, may).
 
 Definition Bind (T1 T2 : Set) (M1 : serverM T1) (M2 : T1 -> serverM T2) : serverM T2 :=
   fun m =>
@@ -93,6 +73,32 @@ Notation "x <- m1 ; m2" := (MBind m1 (fun x => m2))
   (right associativity, at level 60).
 Notation "m1 ;; m2" := (MBind m1 (fun _ => m2))
   (right associativity, at level 60).
+
+(*  operations on state *)
+Definition GetFSM : serverM protocol_state :=
+  fun m => (m, Some (fsm m)).
+Definition SetFSM (s : protocol_state) : serverM unit :=
+  fun m => (mkState s (previousMessage m) (mytid m) (actions m), Some tt).
+Definition GetPreviousMessage' : serverM (option message) :=
+  fun m => (m, Some (previousMessage m)).
+Definition GetPreviousMessage : serverM message :=
+  fun m => (m, previousMessage m).
+Definition DoAction (a : action) : serverM unit :=
+  fun m => (mkState (fsm m) (previousMessage m) (mytid m) (a :: actions m), Some tt).
+Definition Send' (msg : message) (to : N) : serverM unit :=
+  DoAction (send msg to).
+Definition Write (data : string) : serverM unit := DoAction (write data).
+Definition RequestRead : serverM unit := DoAction (request_read).
+Definition PrintLn (data : string) : serverM unit := DoAction (print data).
+Definition Terminate : serverM unit := DoAction terminate.
+
+Definition Fail (T : Set) : serverM T := fun m => (m, None).
+
+Definition Fail' (msg : string) : serverM unit := PrintLn msg;; Terminate. (* this is a version for debugging *)
+(* Definition Fail' (msg : string) : serverM unit := Fail unit. *)
+
+Definition LiftOption (T : Set) (may : option T) : serverM T := fun m => (m, may).
+
 
 (* Notation "l1 <+> l2" := (append l1 l2) (right associativity, at level 30). *)
 (*
@@ -168,21 +174,36 @@ End mspec_Bind.
 
 Inductive ErrorCode : Set :=
 | NotDefined
+| FileNotFound
+| AccessViolation
+| DiskFullOrAllocationExceeded
+| IllegalTFTPOperation
 | UnknownTransferId
+| FileAlreadyExists
 | NoSuchUser.
 
 Local Open Scope N_scope.
 Definition SerializeErrorCode (ec : ErrorCode) : N :=
   match ec with
   | NotDefined => 0
+  | FileNotFound => 1
+  | AccessViolation => 2
+  | DiskFullOrAllocationExceeded => 3
+  | IllegalTFTPOperation => 4
   | UnknownTransferId => 5
+  | FileAlreadyExists => 6
   | NoSuchUser => 7
   end.
 
 Definition DeserializeErrorCode (x : N) : option ErrorCode :=
   match x with
   | 0 => Some NotDefined
+  | 1 => Some FileNotFound
+  | 2 => Some AccessViolation
+  | 3 => Some DiskFullOrAllocationExceeded
+  | 4 => Some IllegalTFTPOperation
   | 5 => Some UnknownTransferId
+  | 6 => Some FileAlreadyExists
   | 7 => Some NoSuchUser
   | _ => None
   end.
@@ -279,24 +300,19 @@ Definition Send (msg : TFTPMessage) (to : N) : serverM unit :=
   Send' (Serialize msg) to.
 
 Definition FailWith (ec : ErrorCode) (msg : string) (errdestination : N) : serverM unit :=
+  PrintLn ("Local error: " ++ msg);;
   Send (ERROR ec msg) errdestination;;
   Terminate.
 
 Definition initialize_upload (tid : N) (port : N) (f : string): state := (* TODO *)
-  (mkState waiting_for_init_ack (None) tid [send (Serialize (RRQ f)) port]).
+  (mkState waiting_for_init_ack (None) tid [send (Serialize (WRQ f)) port]).
 
 Definition initialize_download (tid : N) (port : N) (f : string): state :=
   (mkState waiting_for_init_ack (None) tid [send (Serialize (RRQ f)) port]).
 
-Definition handle_incoming_data (sender : N) (blockid : N) (data : string) : serverM unit :=
-  Write (data);;
-  SetFSM (waiting_for_next_packet sender (blockid + 1));;
-  (if N.of_nat (String.length data) <? 512 then
-    (* this was the last block, finish up *)
-    SetFSM finished
-  else
-    Return tt);;
-  Send (ACK blockid) sender.
+Definition handle_send_next_block (sendertid : N) (ackedblockid : N): serverM unit :=
+  SetFSM (waiting_for_read sendertid (ackedblockid + 1));;
+  RequestRead.
 
 Definition process_step_upload (event : input_event) : serverM unit :=
   match event with
@@ -305,28 +321,49 @@ Definition process_step_upload (event : input_event) : serverM unit :=
     st <- GetFSM;
     match st with
     | waiting_for_init_ack => match tftpmsg with
-      | DATA 1 data => handle_incoming_data sender 1 data
+      | ACK 0 => handle_send_next_block sender 0
+      | ERROR _ msg => PrintLn ("remote error: " ++ msg);; Terminate
       | _ => FailWith NotDefined "Unexpected message" sender
       end
-    | errored => Fail unit (* TODO ? *)
     | waiting_for_next_packet sendertid expectedblockid =>
        if N.eqb sender sendertid then (* check if we received the message from the server or somewhere else and if the source is incorrect, send an error and continue *)
          match tftpmsg with
-         | DATA incomingblockid data =>
+         | ACK incomingblockid =>
            if incomingblockid =? expectedblockid then
-             handle_incoming_data sender incomingblockid data
+             handle_send_next_block sendertid incomingblockid
            else if incomingblockid <? expectedblockid then
-             Return tt (* probably earlier block has been retransmitted, so we ignore it *)
+             Return tt (* probably earlier ACK has been retransmitted, so we ignore it *)
            else
-             FailWith NotDefined "Unexpected block id (too big)" sender (* received a future block id, but this shouldn't happen in interleaved DATA-ACK scheme, so it must be an error *)
+             FailWith IllegalTFTPOperation "Unexpected block id (too big)" sender (* received a future block id, but this shouldn't happen in interleaved DATA-ACK scheme, so it must be an error *)
+         | ERROR _ msg => PrintLn ("remote error: " ++ msg);; Terminate
          | _ => FailWith NotDefined "Unexpected message" sender
          end
        else Send (ERROR UnknownTransferId "Unknown transfer ID") sender
-    | finished => Terminate
+    | waiting_for_read _ _ => Fail' "I was requesting a read, not socket recv"
     end
-  | timeout => Fail unit (* TODO *)
-  | _ => Fail unit
+  | timeout => Fail' "TODO timeout"
+  | read data =>
+    st <- GetFSM;
+    match st with
+    | waiting_for_read sendertid blockid =>
+      Send (DATA blockid data) sendertid;;
+      SetFSM (waiting_for_next_packet sendertid blockid)
+    | _ => Fail' "I was not requesting a file read but got it"
+    end
   end.
+
+
+Definition handle_incoming_data (sender : N) (blockid : N) (data : string) : serverM unit :=
+  Write (data);;
+  SetFSM (waiting_for_next_packet sender (blockid + 1));;
+  (if N.of_nat (String.length data) <? 512 then
+     (* this was the last block, finish up *)
+    PrintLn "Download finished";;
+    Terminate
+  else
+    Return tt);;
+  Send (ACK blockid) sender.
+
 
 Definition process_step_download (event : input_event) : serverM unit :=
   match event with
@@ -335,10 +372,10 @@ Definition process_step_download (event : input_event) : serverM unit :=
     st <- GetFSM;
     match st with
     | waiting_for_init_ack => match tftpmsg with
-      | DATA 1 data => handle_incoming_data sender 1 data
-      | _ => FailWith NotDefined "Unexpected message" sender
+        | DATA 1 data => handle_incoming_data sender 1 data
+        | ERROR _ msg => PrintLn ("remote error: " ++ msg);; Terminate
+        | _ => FailWith NotDefined "Unexpected message" sender
       end
-    | errored => Fail unit (* TODO ? *)
     | waiting_for_next_packet sendertid expectedblockid =>
        if N.eqb sender sendertid then (* check if we received the message from the server or somewhere else and if the source is incorrect, send an error and continue *)
          match tftpmsg with
@@ -348,12 +385,13 @@ Definition process_step_download (event : input_event) : serverM unit :=
            else if incomingblockid <? expectedblockid then
              Return tt (* probably earlier block has been retransmitted, so we ignore it *)
            else
-             FailWith NotDefined "Unexpected block id (too big)" sender (* received a future block id, but this shouldn't happen in interleaved DATA-ACK scheme, so it must be an error *)
+             FailWith IllegalTFTPOperation "Unexpected block id (too big)" sender (* received a future block id, but this shouldn't happen in interleaved DATA-ACK scheme, so it must be an error *)
+         | ERROR _ msg => PrintLn ("remote error: " ++ msg);; Terminate
          | _ => FailWith NotDefined "Unexpected message" sender
          end
        else Send (ERROR UnknownTransferId "Unknown transfer ID") sender
-    | finished => Terminate
+    | waiting_for_read _ _ => Fail' "Reading should not be reachable in download"
     end
-  | timeout => Fail unit (* TODO *)
-  | _ => Fail unit
+  | timeout => Fail' "TODO timeout"
+  | read data => Fail' "Reading in download is not allowed"
   end.
