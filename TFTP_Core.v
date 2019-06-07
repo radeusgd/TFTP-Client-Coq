@@ -38,7 +38,7 @@ Record state : Set := mkState
 Inductive input_event : Set :=
 | incoming : message -> N -> input_event
 | read : message -> input_event
-| eof : input_event
+(* | eof : input_event *)
 | timeout : input_event.
 
 (* Monadic code inspired by  http://adam.chlipala.net/poplmark/compile/coqdoc/MemMonad.html *)

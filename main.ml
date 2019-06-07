@@ -61,7 +61,6 @@ type action
 type event
   = Incoming of message * int
   | Read of bytes
-  | EOF
   | Timeout (* TODO should also provide IP? *) (*TODO add terminated event*)
 
 let translate_coq_result' (coq_state) : (action list) * state =
@@ -91,11 +90,13 @@ let process_step (event :  event) (state : state) : (action list) * state =
   let coq_event = match event with
     | Incoming (msg, sender) -> TFTP_Core.Coq_incoming (str_to_list msg, sender)
     | Read msg -> TFTP_Core.Coq_read (str_to_list msg)
-    | EOF -> TFTP_Core.Coq_eof
+    (* | EOF -> TFTP_Core.Coq_eof *)
     | Timeout -> TFTP_Core.Coq_timeout in
   translate_coq_result (TFTP_Core.process_step coq_event state)
 
 let max_packet_len = 600
+
+let data_len = 512
 
 let main =
   Random.self_init(); (* initialize randomness *)
@@ -145,7 +146,18 @@ let main =
         Printf.eprintf "Timed out\n%!";
         loop (process_step Timeout state)
   and
-    read_file state = fail "TODO read"
+    read_file state =
+    let buf = Bytes.create data_len in
+    let rec read_helper already_read =
+      let read = Unix.read filefd buf already_read (data_len - already_read) in
+      if read < 0 then
+        fail "IO error"
+      else if (already_read + read) == data_len || read == 0 then (* read a full block or got EOF *)
+        loop (process_step (Read (Bytes.sub buf 0 (already_read + read))) state)
+      else
+        read_helper (already_read + read)
+    in
+    read_helper 0
   and
     loop (actions, state) =
     let want_to_read = map handle_action actions in
