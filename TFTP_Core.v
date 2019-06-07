@@ -13,9 +13,6 @@ Import ListNotations.
 
 
 Definition message : Set := string.
-Inductive transfer : Set :=
-| upload : message -> transfer
-| download : message -> transfer.
 
 Inductive action : Set :=
 | send : message -> N -> action
@@ -285,7 +282,10 @@ Definition FailWith (ec : ErrorCode) (msg : string) (errdestination : N) : serve
   Send (ERROR ec msg) errdestination;;
   Terminate.
 
-Definition initialize (tid : N) (port : N) (f : string): state :=
+Definition initialize_upload (tid : N) (port : N) (f : string): state := (* TODO *)
+  (mkState waiting_for_init_ack (None) tid [send (Serialize (RRQ f)) port]).
+
+Definition initialize_download (tid : N) (port : N) (f : string): state :=
   (mkState waiting_for_init_ack (None) tid [send (Serialize (RRQ f)) port]).
 
 Definition handle_incoming_data (sender : N) (blockid : N) (data : string) : serverM unit :=
@@ -298,7 +298,37 @@ Definition handle_incoming_data (sender : N) (blockid : N) (data : string) : ser
     Return tt);;
   Send (ACK blockid) sender.
 
-Definition process_step (event : input_event) : serverM unit :=
+Definition process_step_upload (event : input_event) : serverM unit :=
+  match event with
+  | incoming msg sender =>
+    tftpmsg <- ParseMessage msg;
+    st <- GetFSM;
+    match st with
+    | waiting_for_init_ack => match tftpmsg with
+      | DATA 1 data => handle_incoming_data sender 1 data
+      | _ => FailWith NotDefined "Unexpected message" sender
+      end
+    | errored => Fail unit (* TODO ? *)
+    | waiting_for_next_packet sendertid expectedblockid =>
+       if N.eqb sender sendertid then (* check if we received the message from the server or somewhere else and if the source is incorrect, send an error and continue *)
+         match tftpmsg with
+         | DATA incomingblockid data =>
+           if incomingblockid =? expectedblockid then
+             handle_incoming_data sender incomingblockid data
+           else if incomingblockid <? expectedblockid then
+             Return tt (* probably earlier block has been retransmitted, so we ignore it *)
+           else
+             FailWith NotDefined "Unexpected block id (too big)" sender (* received a future block id, but this shouldn't happen in interleaved DATA-ACK scheme, so it must be an error *)
+         | _ => FailWith NotDefined "Unexpected message" sender
+         end
+       else Send (ERROR UnknownTransferId "Unknown transfer ID") sender
+    | finished => Terminate
+    end
+  | timeout => Fail unit (* TODO *)
+  | _ => Fail unit
+  end.
+
+Definition process_step_download (event : input_event) : serverM unit :=
   match event with
   | incoming msg sender =>
     tftpmsg <- ParseMessage msg;

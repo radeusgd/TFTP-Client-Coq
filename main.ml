@@ -78,21 +78,18 @@ let translate_coq_result (coq_state, result) : (action list) * state =
   | Some () -> translate_coq_result' coq_state
   | None -> fail "Error, terminating"
 
-let initialize_connection (tid : int) (port : int) (transfer : transfer_direction) : (action list) * state =
-  let coq_transfer = match transfer with
-    | Upload fname -> fail "Upload is not implemented"
-    | Download fname -> str_to_list fname
-  in
+let initialize_connection (coq_f) (filename : string) (tid : int) (port : int) : (action list) * state =
+  let coq_filename = str_to_list filename in
   (* let init_state = TFTP_Core.initial_state in *)
-  translate_coq_result' (TFTP_Core.initialize tid port coq_transfer)
+  translate_coq_result' (coq_f tid port coq_filename)
 
-let process_step (event :  event) (state : state) : (action list) * state =
+let process_step (coq_f) (event :  event) (state : state) : (action list) * state =
   let coq_event = match event with
     | Incoming (msg, sender) -> TFTP_Core.Coq_incoming (str_to_list msg, sender)
     | Read msg -> TFTP_Core.Coq_read (str_to_list msg)
     (* | EOF -> TFTP_Core.Coq_eof *)
     | Timeout -> TFTP_Core.Coq_timeout in
-  translate_coq_result (TFTP_Core.process_step coq_event state)
+  translate_coq_result (coq_f coq_event state)
 
 let max_packet_len = 600
 
@@ -108,6 +105,10 @@ let main =
   let filefd = match transfer with
     | Upload fname -> openfile fname [O_RDONLY] 0o664
     | Download fname -> openfile fname [O_WRONLY; O_CREAT; O_TRUNC] 0o664
+  in
+  let (initialize_connection, process_step) = match transfer with
+    | Upload fn -> (initialize_connection TFTP_Core.initialize_upload fn, process_step TFTP_Core.process_step_upload)
+    | Download fn -> (initialize_connection TFTP_Core.initialize_download fn, process_step TFTP_Core.process_step_download)
   in
   let make_addr port = ADDR_INET ((inet_addr_of_string ip), port) in
   (* handle action returns whether the process wants to read from file, if any action wants to, file read will start, otherwise the default action will be to wait for the next packet on the network *)
@@ -166,4 +167,4 @@ let main =
     else (* otherwise go by default - wait for packets on the network *)
       receive state
   in
-  loop (initialize_connection tid port transfer)
+  loop (initialize_connection tid port)
