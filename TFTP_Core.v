@@ -13,14 +13,21 @@ Import ListNotations.
 
 
 Definition message : Set := string.
-Inductive transfer : Set := upload : message -> transfer | download : message -> transfer.
-Inductive action : Set := send : message -> N -> action | terminate : action.
+Inductive transfer : Set :=
+| upload : message -> transfer
+| download : message -> transfer.
 
-Inductive protocol_state : Set
- := waiting_for_init_ack
-  | errored
-  | waiting_for_next_packet (sendertid : N) (blockid : N)
-  | finished.
+Inductive action : Set :=
+| send : message -> N -> action
+| write : message -> action
+| request_read : action
+| terminate : action.
+
+Inductive protocol_state : Set :=
+| waiting_for_init_ack
+| errored
+| waiting_for_next_packet (sendertid : N) (blockid : N)
+| finished.
 
 Record state : Set := mkState
  { fsm : protocol_state
@@ -28,7 +35,11 @@ Record state : Set := mkState
  ; mytid : N
  ; actions : list action
  }.
-Inductive input_event : Set := incoming : message -> N -> input_event | timeout : input_event.
+Inductive input_event : Set :=
+| incoming : message -> N -> input_event
+| read : message -> input_event
+| eof : input_event
+| timeout : input_event.
 
 (* Monadic code inspired by  http://adam.chlipala.net/poplmark/compile/coqdoc/MemMonad.html *)
 Definition serverM (ret : Set) := state -> state * option ret.
@@ -50,7 +61,10 @@ Definition DoAction (a : action) : serverM unit :=
 Definition Send' (msg : message) (to : N) : serverM unit :=
   DoAction (send msg to).
 
-Definition Fail (T : Set) : serverM T := fun m => (m, None). (* TODO send error ?? *)
+Definition Write (data : string) : serverM unit := DoAction (write data).
+
+Definition Fail (T : Set) : serverM T := fun m => (m, None).
+Definition Terminate : serverM unit := DoAction terminate.
 
 Definition LiftOption (T : Set) (may : option T) : serverM T := fun m => (m, may).
 
@@ -267,30 +281,15 @@ Definition ParseMessage (msg : message) : serverM TFTPMessage := LiftOption (Des
 Definition Send (msg : TFTPMessage) (to : N) : serverM unit :=
   Send' (Serialize msg) to.
 
-(* Definition get_message_id (msg : message) : option nat := get_2b_int msg. *)
-
-Definition get_block_id (msg : message) : option N := Get_2b_N (drop 2 msg).
-
-
-
-(* Definition make_RRQ (filename: string) : message := *)
-(*   concat [[zero; ascii_of_nat opRRQ]; filename; [zero]; ["o"; "c"; "t"; "e"; "t"]; [zero]]. *)
+Definition FailWith (ec : ErrorCode) (msg : string) (errdestination : N) : serverM unit :=
+  Send (ERROR ec msg) errdestination;;
+  Terminate.
 
 Definition initialize (tid : N) (port : N) (f : string): state :=
   (mkState waiting_for_init_ack (None) tid [send (Serialize (RRQ f)) port]).
 
-(* Definition make_ACK (blockid : nat) : message := *)
-(*   concat [nat_to_2b opACK; nat_to_2b blockid]. *)
-
-(* Definition make_ERROR (errid : nat) : message := *)
-(*   concat [nat_to_2b opERROR; nat_to_2b errid; [zero]]. *)
-
-(* Definition get_data : message -> string := drop 4. *)
-
-(* Definition data_length (msg : message) : nat := length (get_data msg). *)
-
 Definition handle_incoming_data (sender : N) (blockid : N) (data : string) : serverM unit :=
-  (* TODO write data to file *)
+  Write (data);;
   SetFSM (waiting_for_next_packet sender (blockid + 1));;
   (if N.of_nat (String.length data) <? 512 then
     (* this was the last block, finish up *)
@@ -307,7 +306,7 @@ Definition process_step (event : input_event) : serverM unit :=
     match st with
     | waiting_for_init_ack => match tftpmsg with
       | DATA 1 data => handle_incoming_data sender 1 data
-      | _ => Fail unit
+      | _ => FailWith NotDefined "Unexpected message" sender
       end
     | errored => Fail unit (* TODO ? *)
     | waiting_for_next_packet sendertid expectedblockid =>
@@ -319,11 +318,12 @@ Definition process_step (event : input_event) : serverM unit :=
            else if incomingblockid <? expectedblockid then
              Return tt (* probably earlier block has been retransmitted, so we ignore it *)
            else
-             Fail unit (* received a future block id, but this shouldn't happen in interleaved DATA-ACK scheme, so it must be an error *)
-           | _ => Fail unit
+             FailWith NotDefined "Unexpected block id (too big)" sender (* received a future block id, but this shouldn't happen in interleaved DATA-ACK scheme, so it must be an error *)
+         | _ => FailWith NotDefined "Unexpected message" sender
          end
        else Send (ERROR UnknownTransferId "Unknown transfer ID") sender
-    | finished => Fail unit (* TODO *)
+    | finished => Terminate
     end
   | timeout => Fail unit (* TODO *)
+  | _ => Fail unit
   end.

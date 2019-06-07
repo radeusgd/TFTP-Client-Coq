@@ -53,12 +53,22 @@ let create_udp_socket (tid : int) : file_descr =
 
 type state = TFTP_Core.state
 type message = bytes
-type action = Send of message * int | Terminate
-type event = Incoming of message * int | Timeout (* TODO should also provide IP? *) (*TODO add terminated event*)
+type action
+  = Send of message * int
+  | RequestRead
+  | Write of bytes
+  | Terminate
+type event
+  = Incoming of message * int
+  | Read of bytes
+  | EOF
+  | Timeout (* TODO should also provide IP? *) (*TODO add terminated event*)
 
 let translate_coq_result' (coq_state) : (action list) * state =
   let translate_action coq_action = match coq_action with
     | Coq_send (msg, port) -> Send (list_to_str msg, port)
+    | Coq_write msg -> Write (list_to_str msg)
+    | Coq_request_read -> RequestRead
     | Coq_terminate -> Terminate
   in
   let acts = map translate_action (coq_state.actions) in
@@ -80,6 +90,8 @@ let initialize_connection (tid : int) (port : int) (transfer : transfer_directio
 let process_step (event :  event) (state : state) : (action list) * state =
   let coq_event = match event with
     | Incoming (msg, sender) -> TFTP_Core.Coq_incoming (str_to_list msg, sender)
+    | Read msg -> TFTP_Core.Coq_read (str_to_list msg)
+    | EOF -> TFTP_Core.Coq_eof
     | Timeout -> TFTP_Core.Coq_timeout in
   translate_coq_result (TFTP_Core.process_step coq_event state)
 
@@ -91,23 +103,34 @@ let main =
   let (ip, port, transfer) = parse_args() in
   let tid = assign_random_TID () in
   Printf.eprintf "Connecting to %s:%d, my tid is %d\n%!" ip port tid;
-  let fd = create_udp_socket tid in
+  let sockfd = create_udp_socket tid in
+  let filefd = match transfer with
+    | Upload fname -> openfile fname [O_RDONLY] 0o664
+    | Download fname -> openfile fname [O_WRONLY; O_CREAT; O_TRUNC] 0o664
+  in
   let make_addr port = ADDR_INET ((inet_addr_of_string ip), port) in
+  (* handle action returns whether the process wants to read from file, if any action wants to, file read will start, otherwise the default action will be to wait for the next packet on the network *)
   let handle_action action =
     match action with
     | Terminate -> Printf.eprintf "quitting\n"; exit 0
+    | Write data ->
+      Printf.eprintf "write %d bytes\n%!" (Bytes.length data);
+      Unix.write filefd data 0 (Bytes.length data);
+      false
+    | RequestRead -> true
     | Send (msg, port) ->
       Printf.eprintf "sending '%s' to %d\n%!" (escaped (Bytes.to_string msg)) port;
       let toaddr = make_addr port in
-      let sent = Unix.sendto fd msg 0 (Bytes.length msg) [] toaddr in
-      if sent <> Bytes.length msg then Printf.eprintf "Warning: message has not been sent whole, shouldn't ever happen with UDP! Sent %d/%d bytes" sent (Bytes.length msg)
+      let sent = Unix.sendto sockfd msg 0 (Bytes.length msg) [] toaddr in
+      if sent <> Bytes.length msg then Printf.eprintf "Warning: message has not been sent whole, shouldn't ever happen with UDP! Sent %d/%d bytes" sent (Bytes.length msg);
+      false
   in
   let rec
     receive state =
       Printf.eprintf "waiting for reply\n%!";
       let buf = Bytes.create max_packet_len in
       try
-        let (recvd, sender) = Unix.recvfrom fd buf 0 max_packet_len [] in
+        let (recvd, sender) = Unix.recvfrom sockfd buf 0 max_packet_len [] in
         match sender with
         | ADDR_UNIX _ -> fail "Did not expect a UNIX message on UDP socket!"
         | ADDR_INET (fromip, fromport) ->
@@ -115,13 +138,20 @@ let main =
             (Printf.eprintf "Receive error\n%!";
             loop (process_step Timeout state))
           else
-            (Printf.eprintf "received '%s' from %d\n%!" (escaped (Bytes.to_string buf)) fromport;
-            loop (process_step (Incoming (Bytes.sub buf 0 recvd, fromport)) state))
+            let msg = Bytes.sub buf 0 recvd in
+            (Printf.eprintf "received '%s' from %d\n%!" (escaped (Bytes.to_string msg)) fromport;
+            loop (process_step (Incoming (msg, fromport)) state))
       with Unix.Unix_error (Unix.EAGAIN, "recvfrom", _) ->
         Printf.eprintf "Timed out\n%!";
         loop (process_step Timeout state)
   and
+    read_file state = fail "TODO read"
+  and
     loop (actions, state) =
-      map handle_action actions; receive state
+    let want_to_read = map handle_action actions in
+    if List.mem true want_to_read then (* if any action made us want to read from file *)
+      read_file state
+    else (* otherwise go by default - wait for packets on the network *)
+      receive state
   in
   loop (initialize_connection tid port transfer)
