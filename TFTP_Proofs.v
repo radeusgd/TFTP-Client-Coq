@@ -245,6 +245,26 @@ Theorem SerializationCorrectness5 : forall b:N, b < 256*256 -> Deserialize (Seri
   apply div_lemma1. assumption.
 Qed.
 
+Definition TFTPMessageIsValid (m : TFTPMessage) : Prop :=
+  match m with
+  | RRQ _ => True
+  | WRQ _ => True
+  | ERROR _ _ => True
+  | DATA block _ => block < 256 * 256
+  | ACK block => block < 256 * 256
+  end.
+
+Theorem SerializationCorrectness : forall m : TFTPMessage, TFTPMessageIsValid m -> Deserialize (Serialize m) = Some m.
+  intros.
+  destruct m.
+  * apply SerializationCorrectness1.
+  * apply SerializationCorrectness2.
+  * apply SerializationCorrectness3.
+  * apply SerializationCorrectness4.
+    unfold TFTPMessageIsValid in H. trivial.
+  * apply SerializationCorrectness5.
+    unfold TFTPMessageIsValid in H. trivial.
+Qed.
 
 Definition Fails (m : serverM unit) (st : state) : Prop :=
   Run m st = None.
@@ -335,17 +355,8 @@ Qed.
 
 Opaque Serialize.
 Ltac usat := unfold Satisfies; urun; unfold process_step_download; mbind.
-Ltac parse sc := unfold ParseMessage; rewrite sc; rewrite -> LiftOptSome.
-
-Theorem DownloadTerminatesOnError1 : forall (sender : N) (st : state) (ec : ErrorCode) (em : message), fsm st = waiting_for_init_ack -> Satisfies (process_step_download (incoming (Serialize (ERROR ec em)) sender)) st Terminates.
-  intros.
-  usat.
-  parse SerializationCorrectness3.
-  rewrite H.
-  simpl.
-  unfold Terminates.
-  simpl. auto.
-Qed.
+Ltac parse := unfold ParseMessage; rewrite SerializationCorrectness.
+Ltac tftpmessagevalid := unfold TFTPMessageIsValid; try zify; try omega; auto.
 
 Lemma IfEq (A : Set) : forall (x:N) (t:A) (f:A), (if (x =? x) then t else f) = t.
   intros.
@@ -354,17 +365,40 @@ Lemma IfEq (A : Set) : forall (x:N) (t:A) (f:A), (if (x =? x) then t else f) = t
   * rewrite H. trivial.
 Qed.
 
+Theorem SendSetsPreviousMessage :
+  forall (m:TFTPMessage) (t:N) (st:state),
+    TFTPMessageIsValid m ->
+    Satisfies (Send m t) st (fun st => (previousMessage st = Some (Serialize m, t))).
+  intros.
+  usat.
+  trivial.
+Qed.
+
+Theorem DownloadTerminatesOnError1 : forall (sender : N) (st : state) (ec : ErrorCode) (em : message), fsm st = waiting_for_init_ack -> Satisfies (process_step_download (incoming (Serialize (ERROR ec em)) sender)) st Terminates.
+  intros.
+  usat.
+  parse.
+  rewrite LiftOptSome.
+  rewrite H.
+  simpl.
+  unfold Terminates.
+  simpl. auto.
+  * tftpmessagevalid.
+Qed.
+
 Theorem DownloadTerminatesOnError2 : forall (sender : N) (b : N) (st : state) (ec : ErrorCode) (em : message), fsm st = waiting_for_next_packet sender b -> Satisfies (process_step_download (incoming (Serialize (ERROR ec em)) sender)) st Terminates.
   intros.
   usat.
-  parse SerializationCorrectness3.
+  parse.
+  rewrite LiftOptSome.
   rewrite H.
   simpl.
   unfold Terminates.
   rewrite IfEq.
   simpl. auto.
-Qed.
 
+  tftpmessagevalid.
+Qed.
 
 Theorem DownloadACKInit :
   forall (sender : N) (st : state) (data : message),
@@ -375,8 +409,7 @@ Theorem DownloadACKInit :
       (fun s => Sends (ACK 1) sender s /\ (N.of_nat (String.length data) < 512 \/ fsm s = waiting_for_next_packet sender 2)).
   intros.
   usat.
-  unfold ParseMessage.
-  rewrite SerializationCorrectness4.
+  parse.
   rewrite LiftOptSome.
   rewrite H.
   unfold handle_incoming_data.
@@ -393,9 +426,9 @@ Theorem DownloadACKInit :
     constructor.
     ** auto.
     ** right. trivial.
-  * zify; omega.
+  * trivial.
+    tftpmessagevalid.
 Qed.
-
 
 Theorem DownloadACKNext :
   forall (sender : N) (b : N) (st : state) (data : message),
@@ -408,8 +441,7 @@ Theorem DownloadACKNext :
       (fun s => Sends (ACK b) sender s /\ ((N.of_nat (String.length data) < 512) \/ fsm s = waiting_for_next_packet sender (b + 1))).
   intros.
   usat.
-  unfold ParseMessage.
-  rewrite SerializationCorrectness4.
+  parse.
   rewrite LiftOptSome.
   rewrite H.
   repeat rewrite IfEq.
@@ -438,8 +470,7 @@ Theorem DonwloadTerminatesOnFinish1 :
       Terminates.
   intros.
   usat.
-  unfold ParseMessage.
-  rewrite SerializationCorrectness4.
+  parse.
   rewrite LiftOptSome.
   rewrite H.
   unfold handle_incoming_data.
@@ -448,7 +479,7 @@ Theorem DonwloadTerminatesOnFinish1 :
   * rewrite N.ltb_lt. trivial.
   * rewrite H1.
     unfold Terminate. unfold Terminates. simpl. auto.
-  * zify;omega.
+  * tftpmessagevalid.
 Qed.
 
 Theorem DonwloadTerminatesOnFinish2 :
@@ -462,8 +493,7 @@ Theorem DonwloadTerminatesOnFinish2 :
       Terminates.
   intros.
   usat.
-  unfold ParseMessage.
-  rewrite SerializationCorrectness4.
+  parse.
   rewrite LiftOptSome.
   rewrite H.
   unfold handle_incoming_data.
@@ -483,7 +513,18 @@ Theorem DownloadWritesAllData1 :
       (process_step_download (incoming (Serialize (DATA 1 data)) sender))
       st
       (Writes data).
-Admitted.
+  intros.
+  usat.
+  parse.
+  rewrite LiftOptSome.
+  rewrite H.
+  unfold handle_incoming_data.
+  mbind.
+  remember (N.of_nat (String.length data) <? 512) as last'.
+  destruct last'; simpl; unfold Writes; simpl; auto.
+  * tftpmessagevalid.
+Qed.
+
 Theorem DownloadWritesAllData2 :
   forall (sender : N) (b : N) (st : state) (data : message),
     fsm st = waiting_for_next_packet sender b ->
@@ -492,4 +533,88 @@ Theorem DownloadWritesAllData2 :
       (process_step_download (incoming (Serialize (DATA b data)) sender))
       st
       (Writes data).
-Admitted.
+  intros.
+  usat.
+  parse.
+  rewrite LiftOptSome.
+  rewrite H.
+  repeat rewrite IfEq.
+  unfold handle_incoming_data.
+  mbind.
+  remember (N.of_nat (String.length data) <? 512) as last'.
+  destruct last'; simpl; unfold Writes; simpl; auto.
+
+  trivial.
+Qed.
+
+Theorem DownloadResendOnTimeout3Times :
+  forall (sender : N) (st : state) (m : TFTPMessage),
+    TFTPMessageIsValid m ->
+    previousMessage st = Some (Serialize m, sender) ->
+    retries st < 3 ->
+    Satisfies
+      (process_step_download (timeout))
+      st
+      (Sends m sender).
+  intros.
+  usat.
+  unfold retry_after_timeout.
+  mbind.
+  assert (retries st <? 3 = true).
+  * apply N.ltb_lt. trivial.
+  * rewrite H2.
+    unfold GetPreviousMessage.
+    mbind.
+    rewrite H0.
+    rewrite LiftOptSome.
+    unfold Send'. unfold DoAction. simpl.
+    unfold Sends. simpl. auto.
+Qed.
+
+Theorem DownloadFailAfter3rdTimeout :
+  forall (st : state),
+    retries st >= 3 ->
+    Satisfies
+      (process_step_download timeout)
+      st
+      Terminates.
+  intros.
+  usat.
+  unfold retry_after_timeout.
+  mbind.
+  assert (~(retries st <? 3 = true)).
+  * rewrite N.ltb_lt.
+    zify; omega.
+  * assert (retries st <? 3 = false).
+    destruct (retries st <? 3).
+    ** exfalso. auto.
+    ** trivial.
+    ** rewrite H1.
+       unfold Terminates. simpl. auto.
+Qed.
+
+Theorem DownloadTimeoutDoesNotChangeFSM :
+  forall(s1:state),
+    Satisfies (process_step_download timeout) s1 (fun s2 => fsm s2 = fsm s1) \/ Fails (process_step_download timeout) s1.
+  intros.
+  usat.
+  unfold retry_after_timeout.
+  mbind.
+  remember (retries s1 <? 3) as rets.
+  destruct rets.
+  remember (previousMessage s1) as pm.
+  * destruct pm.
+    ** simpl. auto.
+    ** simpl.
+       right.
+       unfold Fails. unfold Run. unfold option_map.
+       rewrite <- Heqrets.
+       cbn.
+       unfold GetPreviousMessage.
+       rewrite <- Heqpm.
+       unfold LiftOption.
+       trivial.
+  * left.
+    cbn.
+    trivial.
+Qed.

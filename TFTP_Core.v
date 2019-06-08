@@ -334,6 +334,16 @@ Definition initialize_download (tid : N) (port : N) (f : string): option state :
       Send (RRQ f) port
     ) (initialize_state tid).
 
+Definition retry_after_timeout : serverM unit :=
+    rets <- GetRetries;
+    if rets <? 3 then
+      IncrRetries;;
+      pm <- GetPreviousMessage;
+      Send' (fst pm) (snd pm)
+    else
+      PrintLn "3 tries timed out, transfer failed";;
+      Terminate.
+
 Definition handle_send_next_block (sendertid : N) (ackedblockid : N): serverM unit :=
   SetFSM (waiting_for_read sendertid (ackedblockid + 1));;
   RequestRead.
@@ -378,7 +388,7 @@ Definition process_step_upload (event : input_event) : serverM unit :=
       | _ => FailWith IllegalTFTPOperation "Unexpected message" sender
       end
     end
-  | timeout => Fail' "TODO timeout"
+  | timeout => retry_after_timeout
   | read data =>
     st <- GetFSM;
     match st with
@@ -429,11 +439,11 @@ Definition process_step_download (event : input_event) : serverM unit :=
              FailWith IllegalTFTPOperation "Unexpected block id (too big)" sender (* received a future block id, but this shouldn't happen in interleaved DATA-ACK scheme, so it must be an error *)
          | ERROR _ msg => PrintLn ("remote error: " ++ msg);; Terminate
          | _ => FailWith NotDefined "Unexpected message" sender
-         end
+        end
        else Send (ERROR UnknownTransferId "Unknown transfer ID") sender
     | waiting_for_read _ _ => Fail' "Reading should not be reachable in download"
     | waiting_for_last_ack _ _ => Fail' "Waiting for last ack should not be reachable in download"
     end
-  | timeout => Fail' "TODO timeout"
+  | timeout => retry_after_timeout
   | read data => Fail' "Reading in download is not allowed"
   end.

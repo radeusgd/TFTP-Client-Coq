@@ -106,7 +106,6 @@ let sock_send sockfd toaddr msg =
 
 let main =
   Random.self_init(); (* initialize randomness *)
-  Printf.eprintf "hello world\n";
   let (ip, port, transfer) = parse_args() in
   let tid = assign_random_TID () in
   Printf.eprintf "Connecting to %s:%d, my tid is %d\n%!" ip port tid;
