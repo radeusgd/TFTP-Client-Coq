@@ -339,6 +339,13 @@ Theorem DownloadTerminatesOnError1 : forall (sender : N) (st : state) (ec : Erro
   simpl. auto.
 Qed.
 
+Lemma IfEq (A : Set) : forall (x:N) (t:A) (f:A), (if (x =? x) then t else f) = t.
+  intros.
+  assert (x =? x = true).
+  * rewrite N.eqb_eq. trivial.
+  * rewrite H. trivial.
+Qed.
+
 Theorem DownloadTerminatesOnError2 : forall (sender : N) (b : N) (st : state) (ec : ErrorCode) (em : message), fsm st = waiting_for_next_packet sender b -> Satisfies (process_step_download (incoming (Serialize (ERROR ec em)) sender)) st Terminates.
   intros.
   usat.
@@ -346,14 +353,18 @@ Theorem DownloadTerminatesOnError2 : forall (sender : N) (b : N) (st : state) (e
   rewrite H.
   simpl.
   unfold Terminates.
-  assert (sender =? sender = true).
-  * rewrite N.eqb_eq. trivial.
-  * rewrite -> H0.
+  rewrite IfEq.
   simpl. auto.
 Qed.
 
 
-Theorem DownloadACKInit : forall (sender : N) (st : state) (data : message), fsm st = waiting_for_init_ack -> Satisfies (process_step_download (incoming (Serialize (DATA 1 data)) sender)) st (fun s => Sends (ACK 1) sender s /\ (N.of_nat (String.length data) < 512 \/ fsm s = waiting_for_next_packet sender 2)).
+Theorem DownloadACKInit :
+  forall (sender : N) (st : state) (data : message),
+    fsm st = waiting_for_init_ack ->
+    Satisfies
+      (process_step_download (incoming (Serialize (DATA 1 data)) sender))
+      st
+      (fun s => Sends (ACK 1) sender s /\ (N.of_nat (String.length data) < 512 \/ fsm s = waiting_for_next_packet sender 2)).
   intros.
   usat.
   unfold ParseMessage.
@@ -375,4 +386,84 @@ Theorem DownloadACKInit : forall (sender : N) (st : state) (data : message), fsm
     ** auto.
     ** right. trivial.
   * zify; omega.
+Qed.
+
+
+Theorem DownloadACKNext :
+  forall (sender : N) (b : N) (st : state) (data : message),
+    fsm st = waiting_for_next_packet sender b ->
+    b > 1 ->
+    b < 256 * 256 ->
+    Satisfies
+      (process_step_download (incoming (Serialize (DATA b data)) sender))
+      st
+      (fun s => Sends (ACK b) sender s /\ ((N.of_nat (String.length data) < 512) \/ fsm s = waiting_for_next_packet sender (b + 1))).
+  intros.
+  usat.
+  unfold ParseMessage.
+  rewrite SerializationCorrectness4.
+  rewrite LiftOptSome.
+  rewrite H.
+  repeat rewrite IfEq.
+  unfold handle_incoming_data.
+  mbind.
+  unfold SetFSM. simpl.
+  remember (N.of_nat (String.length data) <? 512) as last'.
+  destruct last'.
+  * simpl.
+    unfold Sends. simpl.
+    constructor.
+    ** auto.
+    ** left. apply N.ltb_lt. auto.
+  * unfold Sends. simpl.
+    auto.
+  * trivial.
+Qed.
+
+Theorem DonwloadTerminatesOnFinish1 :
+  forall (sender : N) (st : state) (data : message),
+    fsm st = waiting_for_init_ack ->
+    (N.of_nat (String.length data) < 512) ->
+    Satisfies
+      (process_step_download (incoming (Serialize (DATA 1 data)) sender))
+      st
+      Terminates.
+  intros.
+  usat.
+  unfold ParseMessage.
+  rewrite SerializationCorrectness4.
+  rewrite LiftOptSome.
+  rewrite H.
+  unfold handle_incoming_data.
+  mbind.
+  assert (N.of_nat (String.length data) <? 512 = true).
+  * rewrite N.ltb_lt. trivial.
+  * rewrite H1.
+    unfold Terminate. unfold Terminates. simpl. auto.
+  * zify;omega.
+Qed.
+
+Theorem DonwloadTerminatesOnFinish2 :
+  forall (sender : N) (b : N) (st : state) (data : message),
+    fsm st = waiting_for_next_packet sender b ->
+    b < 256 * 256 ->
+    (N.of_nat (String.length data) < 512) ->
+    Satisfies
+      (process_step_download (incoming (Serialize (DATA b data)) sender))
+      st
+      Terminates.
+  intros.
+  usat.
+  unfold ParseMessage.
+  rewrite SerializationCorrectness4.
+  rewrite LiftOptSome.
+  rewrite H.
+  unfold handle_incoming_data.
+  mbind.
+  repeat rewrite IfEq.
+  assert (N.of_nat (String.length data) <? 512 = true).
+  * rewrite N.ltb_lt. trivial.
+  * rewrite H2.
+    unfold Terminate. unfold Terminates. simpl. auto.
+  * trivial.
 Qed.
