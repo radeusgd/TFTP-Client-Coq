@@ -93,6 +93,8 @@ Definition GetPreviousMessage' : serverM (option (message * N)) :=
 Definition GetPreviousMessage : serverM (message * N) :=
   pm <- GetPreviousMessage';
   LiftOption pm.
+Definition SetPreviousMessage (pm : message) (ps : N) : serverM unit :=
+  fun s => Some (mkState (fsm s) (Some (pm, ps)) (mytid s) (actions s) (retries s), tt).
 Definition DoAction (a : action) : serverM unit :=
   fun s => Some (mkState (fsm s) (previousMessage s) (mytid s) (a :: actions s) (retries s), tt).
 Definition Send' (msg : message) (to : N) : serverM unit :=
@@ -310,7 +312,9 @@ Definition Deserialize (data : string) : option TFTPMessage :=
 
 Definition ParseMessage (msg : message) : serverM TFTPMessage := LiftOption (Deserialize msg).
 Definition Send (msg : TFTPMessage) (to : N) : serverM unit :=
-  Send' (Serialize msg) to.
+  let m := Serialize msg in
+  Send' m to;;
+  SetPreviousMessage m to.
 
 Definition FailWith (ec : ErrorCode) (msg : string) (errdestination : N) : serverM unit :=
   PrintLn ("Local error: " ++ msg);;

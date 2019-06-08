@@ -270,51 +270,32 @@ Definition RequestsRead (st : state) : Prop :=
 Definition Terminates (st : state) : Prop :=
   In (terminate) (actions st).
 
-Theorem UploadStartsWithWRQ : forall (tid : N) (port : N) (f : string), exists st : state, initialize_upload tid port f = Some st /\ Sends (WRQ f) port st.
+Lemma SomeExists (A : Set) (prop : A -> Prop) : forall x:A, prop x -> exists e:A, Some x = Some e /\ prop e.
+  intros.
+  exists x.
+  auto.
+Qed.
+
+Theorem UploadStartsWithWRQ :
+  forall (tid : N) (port : N) (f : string),
+  exists st : state, initialize_upload tid port f = Some st /\ Sends (WRQ f) port st.
   intros.
   unfold initialize_upload.
   unfold Sends.
   unfold Run. unfold option_map. simpl.
-  (* there should be a better way to prove this part, but I don't know how *)
-  exists ({|
-      fsm := waiting_for_init_ack;
-      previousMessage := None;
-      mytid := tid;
-      actions := [send
-                    (String zero
-                       (String (ascii_of_pos 2)
-                          (f ++
-                           String zero
-                             (String "o"
-                                (String "c"
-                                   (String "t"
-                                      (String "e"
-                                         (String "t" null))))))))
-                    port];
-      retries := 0 |}). simpl. auto.
+  apply SomeExists.
+  simpl.
+  auto.
 Qed.
 
-Theorem DownloadStartsWithRRQ : forall (tid : N) (port : N) (f : string), exists st : state, initialize_download tid port f = Some st /\ Sends (RRQ f) port st.
+Theorem DownloadStartsWithRRQ :
+  forall (tid : N) (port : N) (f : string),
+  exists st : state, initialize_download tid port f = Some st /\ Sends (RRQ f) port st.
   intros.
   unfold initialize_download.
   unfold Sends.
   unfold Run. unfold option_map. simpl.
-  exists {|
-      fsm := waiting_for_init_ack;
-      previousMessage := None;
-      mytid := tid;
-      actions := [send
-                    (String zero
-                       (String (ascii_of_pos 1)
-                          (f ++
-                           String zero
-                             (String "o"
-                                (String "c"
-                                   (String "t"
-                                      (String "e"
-                                         (String "t" null))))))))
-                    port];
-      retries := 0 |}.
+  apply SomeExists.
   simpl.
   auto.
 Qed.
