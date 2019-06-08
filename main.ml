@@ -5,7 +5,6 @@ open Bytes
 open List
 open TFTP_Core
 
-
 (* explode and implode borrowed from https://github.com/ocaml/ocaml/issues/5367 *)
 let explode s =
   let rec exp i l =
@@ -44,7 +43,7 @@ let assign_random_TID () : int =
 
 let create_udp_socket (tid : int) : file_descr =
   let udp_protocol_type = 17 in
-  let recv_timeout = 3.0 in
+  let recv_timeout = 1.0 in
   let fd = Unix.socket PF_INET SOCK_DGRAM udp_protocol_type in
   let addr = Unix.ADDR_INET (inet_addr_any, tid) in
   Unix.setsockopt_float fd Unix.SO_RCVTIMEO recv_timeout;
@@ -99,10 +98,19 @@ let max_packet_len = 600
 
 let data_len = TFTP_Core.block_size
 
+(* this can be changed to a random generator to simulate packet loss *)
+let wants_to_drop () = false
+(* let wants_to_drop () = Random.int 40 < 1 *)
+
 let sock_send sockfd toaddr msg =
+  (* Unix.sleepf 0.4; (\* this can be used to simulate slow network *\) *)
+  if wants_to_drop () then Printf.eprintf "Ooops, dropped send\n%!" else
   let sent = Unix.sendto sockfd msg 0 (Bytes.length msg) [] toaddr in
   if sent <> Bytes.length msg then Printf.eprintf "Warning: message has not been sent whole, shouldn't ever happen with UDP! Sent %d/%d bytes" sent (Bytes.length msg)
 
+let rec sock_recv sockfd buf =
+  let res = Unix.recvfrom sockfd buf 0 max_packet_len [] in
+  if wants_to_drop () then (Printf.eprintf "Ooops, dropped recv\n%!"; sock_recv sockfd buf) else res
 
 let main =
   Random.self_init(); (* initialize randomness *)
@@ -140,7 +148,7 @@ let main =
       Printf.eprintf "waiting for reply\n%!";
       let buf = Bytes.create max_packet_len in
       try
-        let (recvd, sender) = Unix.recvfrom sockfd buf 0 max_packet_len [] in
+        let (recvd, sender) = sock_recv sockfd buf in
         match sender with
         | ADDR_UNIX _ -> fail "Did not expect a UNIX message on UDP socket!"
         | ADDR_INET (fromip, fromport) ->
