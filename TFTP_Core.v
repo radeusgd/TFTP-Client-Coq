@@ -32,6 +32,7 @@ Record state : Set := mkState
  ; previousMessage : option (message * N)
  ; mytid : N
  ; actions : list action
+ ; retries : N
  }.
 Inductive input_event : Set :=
 | incoming : message -> N -> input_event
@@ -81,22 +82,29 @@ Definition LiftOption (T : Set) (may : option T) : serverM T :=
         end.
 (*  operations on state *)
 Definition GetFSM : serverM protocol_state :=
-  fun m => Some (m, fsm m).
-Definition SetFSM (s : protocol_state) : serverM unit :=
-  fun m => Some (mkState s (previousMessage m) (mytid m) (actions m), tt).
+  fun s => Some (s, fsm s).
+Definition SetFSM (ps : protocol_state) : serverM unit :=
+  fun s => Some (mkState ps (previousMessage s) (mytid s) (actions s) (retries s), tt).
 Definition GetPreviousMessage' : serverM (option (message * N)) :=
-  fun m => Some (m, previousMessage m).
+  fun s => Some (s, previousMessage s).
 Definition GetPreviousMessage : serverM (message * N) :=
   pm <- GetPreviousMessage';
   LiftOption pm.
 Definition DoAction (a : action) : serverM unit :=
-  fun m => Some (mkState (fsm m) (previousMessage m) (mytid m) (a :: actions m), tt).
+  fun s => Some (mkState (fsm s) (previousMessage s) (mytid s) (a :: actions s) (retries s), tt).
 Definition Send' (msg : message) (to : N) : serverM unit :=
   DoAction (send msg to).
 Definition Write (data : string) : serverM unit := DoAction (write data).
 Definition RequestRead : serverM unit := DoAction (request_read).
 Definition PrintLn (data : string) : serverM unit := DoAction (print data).
 Definition Terminate : serverM unit := DoAction terminate.
+
+Definition GetRetries : serverM N :=
+  fun s => Some (s, retries s).
+Definition IncrRetries : serverM unit :=
+  fun s => Some (mkState (fsm s) (previousMessage s) (mytid s) (actions s) (retries s + 1), tt).
+Definition ResetRetries : serverM unit :=
+  fun s => Some (mkState (fsm s) (previousMessage s) (mytid s) (actions s) 0, tt).
 
 Definition Fail (T : Set) : serverM T := fun m => None.
 
@@ -307,10 +315,10 @@ Definition FailWith (ec : ErrorCode) (msg : string) (errdestination : N) : serve
   Terminate.
 
 Definition initialize_upload (tid : N) (port : N) (f : string): state := (* TODO *)
-  (mkState waiting_for_init_ack (None) tid [send (Serialize (WRQ f)) port]).
+  (mkState waiting_for_init_ack (None) tid [send (Serialize (WRQ f)) port] 0).
 
 Definition initialize_download (tid : N) (port : N) (f : string): state :=
-  (mkState waiting_for_init_ack (None) tid [send (Serialize (RRQ f)) port]).
+  (mkState waiting_for_init_ack (None) tid [send (Serialize (RRQ f)) port] 0).
 
 Definition handle_send_next_block (sendertid : N) (ackedblockid : N): serverM unit :=
   SetFSM (waiting_for_read sendertid (ackedblockid + 1));;
