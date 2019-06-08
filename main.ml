@@ -83,7 +83,9 @@ let translate_coq_result (coq_result) : (action list) * state =
 let initialize_connection (coq_f) (filename : string) (tid : int) (port : int) : (action list) * state =
   let coq_filename = str_to_list filename in
   (* let init_state = TFTP_Core.initial_state in *)
-  translate_coq_result' (coq_f tid port coq_filename)
+  match coq_f tid port coq_filename with
+  | Some coq_state -> translate_coq_result' coq_state
+  | None -> fail "Initialization error, terminating"
 
 let process_step (coq_f) (event :  event) (state : state) : (action list) * state =
   let coq_event = match event with

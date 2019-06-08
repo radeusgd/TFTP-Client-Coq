@@ -61,6 +61,9 @@ Class Monad (M : Set -> Set) := {
 Instance monad_serverM : Monad serverM :=
  { MBind := Bind }.
 
+Definition Run (m : serverM unit) (st : state) : option state :=
+  option_map fst (m st).
+
 Definition OptBind (T1 T2 : Set) (M1 : option T1) (M2 : T1 -> option T2) : option T2 :=
   match M1 with
   | Some v => M2 v
@@ -314,11 +317,18 @@ Definition FailWith (ec : ErrorCode) (msg : string) (errdestination : N) : serve
   Send (ERROR ec msg) errdestination;;
   Terminate.
 
-Definition initialize_upload (tid : N) (port : N) (f : string): state := (* TODO *)
-  (mkState waiting_for_init_ack (None) tid [send (Serialize (WRQ f)) port] 0).
+Definition initialize_state (tid : N) : state :=
+  (mkState waiting_for_init_ack (None) tid [] 0).
 
-Definition initialize_download (tid : N) (port : N) (f : string): state :=
-  (mkState waiting_for_init_ack (None) tid [send (Serialize (RRQ f)) port] 0).
+Definition initialize_upload (tid : N) (port : N) (f : string): option state :=
+  Run (
+      Send (WRQ f) port
+    ) (initialize_state tid).
+
+Definition initialize_download (tid : N) (port : N) (f : string): option state :=
+  Run (
+      Send (RRQ f) port
+    ) (initialize_state tid).
 
 Definition handle_send_next_block (sendertid : N) (ackedblockid : N): serverM unit :=
   SetFSM (waiting_for_read sendertid (ackedblockid + 1));;
@@ -380,6 +390,7 @@ Definition process_step_upload (event : input_event) : serverM unit :=
 
 
 Definition handle_incoming_data (sender : N) (blockid : N) (data : string) : serverM unit :=
+  ResetRetries;;
   Write (data);;
   Send (ACK blockid) sender;;
   (if N.of_nat (String.length data) <? 512 then

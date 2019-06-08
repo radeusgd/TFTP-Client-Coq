@@ -246,9 +246,6 @@ Theorem SerializationCorrectness5 : forall b:N, b < 256*256 -> Deserialize (Seri
 Qed.
 
 
-Definition Run (m : serverM unit) (st : state) : option state :=
-  option_map fst (m st).
-
 Definition Fails (m : serverM unit) (st : state) : Prop :=
   Run m st = None.
 
@@ -273,18 +270,51 @@ Definition RequestsRead (st : state) : Prop :=
 Definition Terminates (st : state) : Prop :=
   In (terminate) (actions st).
 
-Theorem UploadStartsWithWRQ : forall (tid : N) (port : N) (f : string), Sends (WRQ f) port (initialize_upload tid port f).
+Theorem UploadStartsWithWRQ : forall (tid : N) (port : N) (f : string), exists st : state, initialize_upload tid port f = Some st /\ Sends (WRQ f) port st.
   intros.
   unfold initialize_upload.
   unfold Sends.
-  simpl.
-  auto.
+  unfold Run. unfold option_map. simpl.
+  (* there should be a better way to prove this part, but I don't know how *)
+  exists ({|
+      fsm := waiting_for_init_ack;
+      previousMessage := None;
+      mytid := tid;
+      actions := [send
+                    (String zero
+                       (String (ascii_of_pos 2)
+                          (f ++
+                           String zero
+                             (String "o"
+                                (String "c"
+                                   (String "t"
+                                      (String "e"
+                                         (String "t" null))))))))
+                    port];
+      retries := 0 |}). simpl. auto.
 Qed.
 
-Theorem DownloadStartsWithRRQ : forall (tid : N) (port : N) (f : string), Sends (RRQ f) port (initialize_download tid port f).
+Theorem DownloadStartsWithRRQ : forall (tid : N) (port : N) (f : string), exists st : state, initialize_download tid port f = Some st /\ Sends (RRQ f) port st.
   intros.
-  unfold initialize_upload.
+  unfold initialize_download.
   unfold Sends.
+  unfold Run. unfold option_map. simpl.
+  exists {|
+      fsm := waiting_for_init_ack;
+      previousMessage := None;
+      mytid := tid;
+      actions := [send
+                    (String zero
+                       (String (ascii_of_pos 1)
+                          (f ++
+                           String zero
+                             (String "o"
+                                (String "c"
+                                   (String "t"
+                                      (String "e"
+                                         (String "t" null))))))))
+                    port];
+      retries := 0 |}.
   simpl.
   auto.
 Qed.
@@ -325,9 +355,6 @@ Qed.
 Opaque Serialize.
 Ltac usat := unfold Satisfies; urun; unfold process_step_download; mbind.
 Ltac parse sc := unfold ParseMessage; rewrite sc; rewrite -> LiftOptSome.
-
-Definition DownloadState (st : state) : Prop :=
-  fsm st = waiting_for_init_ack \/ exists (s : N) (b : N), fsm st = waiting_for_next_packet s b.
 
 Theorem DownloadTerminatesOnError1 : forall (sender : N) (st : state) (ec : ErrorCode) (em : message), fsm st = waiting_for_init_ack -> Satisfies (process_step_download (incoming (Serialize (ERROR ec em)) sender)) st Terminates.
   intros.
@@ -467,3 +494,21 @@ Theorem DonwloadTerminatesOnFinish2 :
     unfold Terminate. unfold Terminates. simpl. auto.
   * trivial.
 Qed.
+
+Theorem DownloadWritesAllData1 :
+  forall (sender : N) (st : state) (data : message),
+    fsm st = waiting_for_init_ack ->
+    Satisfies
+      (process_step_download (incoming (Serialize (DATA 1 data)) sender))
+      st
+      (Writes data).
+Admitted.
+Theorem DownloadWritesAllData2 :
+  forall (sender : N) (b : N) (st : state) (data : message),
+    fsm st = waiting_for_next_packet sender b ->
+    b < 256 * 256 ->
+    Satisfies
+      (process_step_download (incoming (Serialize (DATA b data)) sender))
+      st
+      (Writes data).
+Admitted.
