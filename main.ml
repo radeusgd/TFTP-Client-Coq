@@ -95,7 +95,7 @@ let process_step (coq_f) (event :  event) (state : state) : (action list) * stat
 
 let max_packet_len = 600
 
-let data_len = 512
+let data_len = TFTP_Core.block_size
 
 let sock_send sockfd toaddr msg =
   let sent = Unix.sendto sockfd msg 0 (Bytes.length msg) [] toaddr in
@@ -124,7 +124,7 @@ let main =
     | Terminate -> Printf.eprintf "quitting\n"; exit 0
     | Write data ->
       Printf.eprintf "write %d bytes\n%!" (Bytes.length data);
-      Unix.write filefd data 0 (Bytes.length data);
+      let _ = Unix.write filefd data 0 (Bytes.length data) in
       false
     | RequestRead -> true
     | Print msg -> Printf.printf "%s\n%!" msg; false

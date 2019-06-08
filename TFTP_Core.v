@@ -11,7 +11,7 @@ Set Implicit Arguments.
 
 Import ListNotations.
 
-
+Definition block_size : N := 512.
 Definition message : Set := string.
 
 Inductive action : Set :=
@@ -24,6 +24,7 @@ Inductive action : Set :=
 Inductive protocol_state : Set :=
 | waiting_for_init_ack
 | waiting_for_next_packet (sendertid : N) (blockid : N)
+| waiting_for_last_ack (sendertid : N) (lastblockid : N)
 | waiting_for_read (sendertid : N) (blockid : N).
 
 Record state : Set := mkState
@@ -320,7 +321,8 @@ Definition process_step_upload (event : input_event) : serverM unit :=
     tftpmsg <- ParseMessage msg;
     st <- GetFSM;
     match st with
-    | waiting_for_init_ack => match tftpmsg with
+    | waiting_for_init_ack =>
+      match tftpmsg with
       | ACK 0 => handle_send_next_block sender 0
       | ERROR _ msg => PrintLn ("remote error: " ++ msg);; Terminate
       | _ => FailWith NotDefined "Unexpected message" sender
@@ -336,10 +338,22 @@ Definition process_step_upload (event : input_event) : serverM unit :=
            else
              FailWith IllegalTFTPOperation "Unexpected block id (too big)" sender (* received a future block id, but this shouldn't happen in interleaved DATA-ACK scheme, so it must be an error *)
          | ERROR _ msg => PrintLn ("remote error: " ++ msg);; Terminate
-         | _ => FailWith NotDefined "Unexpected message" sender
+         | _ => FailWith IllegalTFTPOperation "Unexpected message" sender
          end
        else Send (ERROR UnknownTransferId "Unknown transfer ID") sender
     | waiting_for_read _ _ => Fail' "I was requesting a read, not socket recv"
+    | waiting_for_last_ack sendertid lastblockid =>
+      match tftpmsg with
+      | ACK incomingblockid =>
+        if incomingblockid =? lastblockid then
+          PrintLn "Upload complete";; Terminate
+        else if incomingblockid <? lastblockid then
+          Return tt (* probably earlier ACK has been retransmitted, so we ignore it *)
+        else
+          FailWith IllegalTFTPOperation "Unexpected block id (too big)" sender
+      | ERROR _ msg => PrintLn ("remote error: " ++ msg);; Terminate
+      | _ => FailWith IllegalTFTPOperation "Unexpected message" sender
+      end
     end
   | timeout => Fail' "TODO timeout"
   | read data =>
@@ -347,7 +361,10 @@ Definition process_step_upload (event : input_event) : serverM unit :=
     match st with
     | waiting_for_read sendertid blockid =>
       Send (DATA blockid data) sendertid;;
-      SetFSM (waiting_for_next_packet sendertid blockid)
+      if N_of_nat (length data) <? block_size then (* if we did not read a full block it means it was the last block, so we should start the termination process *)
+        SetFSM (waiting_for_last_ack sendertid blockid)
+      else
+        SetFSM (waiting_for_next_packet sendertid blockid)
     | _ => Fail' "I was not requesting a file read but got it"
     end
   end.
@@ -355,14 +372,14 @@ Definition process_step_upload (event : input_event) : serverM unit :=
 
 Definition handle_incoming_data (sender : N) (blockid : N) (data : string) : serverM unit :=
   Write (data);;
-  SetFSM (waiting_for_next_packet sender (blockid + 1));;
+  Send (ACK blockid) sender;;
   (if N.of_nat (String.length data) <? 512 then
      (* this was the last block, finish up *)
     PrintLn "Download finished";;
     Terminate
   else
-    Return tt);;
-  Send (ACK blockid) sender.
+    SetFSM (waiting_for_next_packet sender (blockid + 1))
+  ).
 
 
 Definition process_step_download (event : input_event) : serverM unit :=
@@ -391,6 +408,7 @@ Definition process_step_download (event : input_event) : serverM unit :=
          end
        else Send (ERROR UnknownTransferId "Unknown transfer ID") sender
     | waiting_for_read _ _ => Fail' "Reading should not be reachable in download"
+    | waiting_for_last_ack _ _ =>Fail' "Waiting for last ack should not be reachable in download"
     end
   | timeout => Fail' "TODO timeout"
   | read data => Fail' "Reading in download is not allowed"
