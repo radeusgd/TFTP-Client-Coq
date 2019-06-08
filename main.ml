@@ -75,9 +75,9 @@ let translate_coq_result' (coq_state) : (action list) * state =
   let acts = map translate_action (coq_state.actions) in
   (acts, { coq_state with actions = [] })
 
-let translate_coq_result (coq_state, result) : (action list) * state =
-  match result with
-  | Some () -> translate_coq_result' coq_state
+let translate_coq_result (coq_result) : (action list) * state =
+  match coq_result with
+  | Some (coq_state, ()) -> translate_coq_result' coq_state
   | None -> fail "Error, terminating"
 
 let initialize_connection (coq_f) (filename : string) (tid : int) (port : int) : (action list) * state =

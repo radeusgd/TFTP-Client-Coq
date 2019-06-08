@@ -40,18 +40,17 @@ Inductive input_event : Set :=
 | timeout : input_event.
 
 (* Monadic code inspired by  http://adam.chlipala.net/poplmark/compile/coqdoc/MemMonad.html *)
-Definition serverM (ret : Set) := state -> state * option ret.
+Definition serverM (ret : Set) := state -> option (state * ret).
 (* TODO thinking about including an action writer in the used Monad to have multiple possible actions + error semantics (fail action) *)
 
 Definition Return (T : Set) (v : T) : serverM T :=
-  fun m => (m, Some v).
+  fun m => Some (m, v).
 
 Definition Bind (T1 T2 : Set) (M1 : serverM T1) (M2 : T1 -> serverM T2) : serverM T2 :=
   fun m =>
-    let (m', v1) := M1 m in
-    match v1 with
-    | Some v => M2 v m'
-    | None => (m', None)
+    match M1 m with
+    | Some m' => let (s1, v1) := m' in M2 v1 s1
+    | None => None
     end.
 
 Class Monad (M : Set -> Set) := {
@@ -75,17 +74,23 @@ Notation "x <- m1 ; m2" := (MBind m1 (fun x => m2))
 Notation "m1 ;; m2" := (MBind m1 (fun _ => m2))
   (right associativity, at level 60).
 
+Definition LiftOption (T : Set) (may : option T) : serverM T :=
+  fun m => match may with
+        | Some v => Some (m, v)
+        | None => None
+        end.
 (*  operations on state *)
 Definition GetFSM : serverM protocol_state :=
-  fun m => (m, Some (fsm m)).
+  fun m => Some (m, fsm m).
 Definition SetFSM (s : protocol_state) : serverM unit :=
-  fun m => (mkState s (previousMessage m) (mytid m) (actions m), Some tt).
+  fun m => Some (mkState s (previousMessage m) (mytid m) (actions m), tt).
 Definition GetPreviousMessage' : serverM (option message) :=
-  fun m => (m, Some (previousMessage m)).
+  fun m => Some (m, previousMessage m).
 Definition GetPreviousMessage : serverM message :=
-  fun m => (m, previousMessage m).
+  pm <- GetPreviousMessage';
+  LiftOption pm.
 Definition DoAction (a : action) : serverM unit :=
-  fun m => (mkState (fsm m) (previousMessage m) (mytid m) (a :: actions m), Some tt).
+  fun m => Some (mkState (fsm m) (previousMessage m) (mytid m) (a :: actions m), tt).
 Definition Send' (msg : message) (to : N) : serverM unit :=
   DoAction (send msg to).
 Definition Write (data : string) : serverM unit := DoAction (write data).
@@ -93,12 +98,11 @@ Definition RequestRead : serverM unit := DoAction (request_read).
 Definition PrintLn (data : string) : serverM unit := DoAction (print data).
 Definition Terminate : serverM unit := DoAction terminate.
 
-Definition Fail (T : Set) : serverM T := fun m => (m, None).
+Definition Fail (T : Set) : serverM T := fun m => None.
 
 Definition Fail' (msg : string) : serverM unit := PrintLn msg;; Terminate. (* this is a version for debugging *)
 (* Definition Fail' (msg : string) : serverM unit := Fail unit. *)
 
-Definition LiftOption (T : Set) (may : option T) : serverM T := fun m => (m, may).
 
 
 (* Notation "l1 <+> l2" := (append l1 l2) (right associativity, at level 30). *)

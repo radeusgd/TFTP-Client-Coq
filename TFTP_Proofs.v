@@ -244,3 +244,38 @@ Theorem SerializationCorrectness5 : forall b:N, b < 256*256 -> Deserialize (Seri
 
   apply div_lemma1. assumption.
 Qed.
+
+
+Definition Run (m : serverM unit) (st : state) : option state :=
+  option_map fst (m st).
+
+Definition Fails (m : serverM unit) (st : state) : Prop :=
+  Run m st = None.
+
+Definition Satisfies (m : serverM unit) (st : state) (prop : state -> Prop) : Prop :=
+  match Run m st with
+  | Some st1 => prop st1
+  | None => False
+  end.
+
+Definition Sends (msg : TFTPMessage) (to : N) (st : state) : Prop :=
+  In (send (Serialize msg) to) (actions st).
+
+Definition Terminates (st : state) : Prop :=
+  In (terminate) (actions st).
+
+Theorem UploadStartsWithWRQ : forall (tid : N) (port : N) (f : string), Sends (WRQ f) port (initialize_upload tid port f).
+  intros.
+  unfold initialize_upload.
+  unfold Sends.
+  simpl.
+  auto.
+Qed.
+
+Theorem DownloadStartsWithRRQ : forall (tid : N) (port : N) (f : string), Sends (RRQ f) port (initialize_download tid port f).
+  intros.
+  unfold initialize_upload.
+  unfold Sends.
+  simpl.
+  auto.
+Qed.
