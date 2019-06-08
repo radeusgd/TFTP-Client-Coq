@@ -29,7 +29,7 @@ Inductive protocol_state : Set :=
 
 Record state : Set := mkState
  { fsm : protocol_state
- ; previousMessage : option message
+ ; previousMessage : option (message * N)
  ; mytid : N
  ; actions : list action
  }.
@@ -84,9 +84,9 @@ Definition GetFSM : serverM protocol_state :=
   fun m => Some (m, fsm m).
 Definition SetFSM (s : protocol_state) : serverM unit :=
   fun m => Some (mkState s (previousMessage m) (mytid m) (actions m), tt).
-Definition GetPreviousMessage' : serverM (option message) :=
+Definition GetPreviousMessage' : serverM (option (message * N)) :=
   fun m => Some (m, previousMessage m).
-Definition GetPreviousMessage : serverM message :=
+Definition GetPreviousMessage : serverM (message * N) :=
   pm <- GetPreviousMessage';
   LiftOption pm.
 Definition DoAction (a : action) : serverM unit :=
@@ -100,12 +100,9 @@ Definition Terminate : serverM unit := DoAction terminate.
 
 Definition Fail (T : Set) : serverM T := fun m => None.
 
-Definition Fail' (msg : string) : serverM unit := PrintLn msg;; Terminate. (* this is a version for debugging *)
-(* Definition Fail' (msg : string) : serverM unit := Fail unit. *)
+(* Definition Fail' (msg : string) : serverM unit := PrintLn msg;; Terminate. (* this is a version for debugging, it will not work in proofs! *) *)
+Definition Fail' (msg : string) : serverM unit := Fail unit.
 
-
-
-(* Notation "l1 <+> l2" := (append l1 l2) (right associativity, at level 30). *)
 (*
 Definition readMessageM (ret : Set) := message -> message * ret.
 
@@ -412,7 +409,7 @@ Definition process_step_download (event : input_event) : serverM unit :=
          end
        else Send (ERROR UnknownTransferId "Unknown transfer ID") sender
     | waiting_for_read _ _ => Fail' "Reading should not be reachable in download"
-    | waiting_for_last_ack _ _ =>Fail' "Waiting for last ack should not be reachable in download"
+    | waiting_for_last_ack _ _ => Fail' "Waiting for last ack should not be reachable in download"
     end
   | timeout => Fail' "TODO timeout"
   | read data => Fail' "Reading in download is not allowed"

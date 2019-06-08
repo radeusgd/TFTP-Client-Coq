@@ -258,8 +258,17 @@ Definition Satisfies (m : serverM unit) (st : state) (prop : state -> Prop) : Pr
   | None => False
   end.
 
+Definition DoesNotFail (m : serverM unit) (st : state) : Prop :=
+  Satisfies m st (fun s => True).
+
 Definition Sends (msg : TFTPMessage) (to : N) (st : state) : Prop :=
   In (send (Serialize msg) to) (actions st).
+
+Definition Writes (data : message) (st : state) : Prop :=
+  In (write data) (actions st).
+
+Definition RequestsRead (st : state) : Prop :=
+  In (request_read) (actions st).
 
 Definition Terminates (st : state) : Prop :=
   In (terminate) (actions st).
@@ -278,4 +287,92 @@ Theorem DownloadStartsWithRRQ : forall (tid : N) (port : N) (f : string), Sends 
   unfold Sends.
   simpl.
   auto.
+Qed.
+
+Ltac mbind := simpl; unfold Bind; simpl.
+
+Ltac urun := unfold Run; unfold option_map.
+Ltac ufail := unfold Fail'; unfold Fail.
+Ltac ufails := unfold Fails; unfold Run; unfold option_map; trivial.
+
+(* Definition DoesNotReach (prop : state -> Prop) (m : serverM unit) (st : state) : Prop := Fails m st \/ Satisfies m st (fun s => ~ prop s). *)
+
+(* Lemma AnyMessage : forall (m : message) (s : state), ParseMessage m s = None \/ exists (msg : TFTPMessage), ParseMessage m s = Some (s, msg). *)
+(*   intros. *)
+(*   unfold ParseMessage; unfold LiftOption. unfold Deserialize. *)
+(*   destruct m. *)
+(*   * simpl. auto. *)
+(*   * destruct m. *)
+(*   - simpl. auto. *)
+(*   - simpl.  *)
+
+(* Theorem DownloadNeverReadsFile : forall (e : input_event) (st : state), DoesNotReach (RequestsRead) (process_step_download e) st. *)
+(*   intros. *)
+(*   unfold process_step_download. *)
+(*   destruct e. *)
+(*   * unfold DoesNotReach. *)
+(*     ** mbind. *)
+       
+(*     destruct st. destruct fsm. cbn. *)
+(*   * ufail. unfold DoesNotReach. left. ufails. *)
+(*   * ufail. unfold DoesNotReach. left. ufails. *)
+
+Lemma LiftOptSome (T : Set) : forall (x:T) (st : state), LiftOption (Some x) st = Some (st, x).
+  intros.
+  simpl. trivial.
+Qed.
+
+Opaque Serialize.
+Ltac usat := unfold Satisfies; urun; unfold process_step_download; mbind.
+Ltac parse sc := unfold ParseMessage; rewrite sc; rewrite -> LiftOptSome.
+
+Definition DownloadState (st : state) : Prop :=
+  fsm st = waiting_for_init_ack \/ exists (s : N) (b : N), fsm st = waiting_for_next_packet s b.
+
+Theorem DownloadTerminatesOnError1 : forall (sender : N) (st : state) (ec : ErrorCode) (em : message), fsm st = waiting_for_init_ack -> Satisfies (process_step_download (incoming (Serialize (ERROR ec em)) sender)) st Terminates.
+  intros.
+  usat.
+  parse SerializationCorrectness3.
+  rewrite H.
+  simpl.
+  unfold Terminates.
+  simpl. auto.
+Qed.
+
+Theorem DownloadTerminatesOnError2 : forall (sender : N) (b : N) (st : state) (ec : ErrorCode) (em : message), fsm st = waiting_for_next_packet sender b -> Satisfies (process_step_download (incoming (Serialize (ERROR ec em)) sender)) st Terminates.
+  intros.
+  usat.
+  parse SerializationCorrectness3.
+  rewrite H.
+  simpl.
+  unfold Terminates.
+  assert (sender =? sender = true).
+  * rewrite N.eqb_eq. trivial.
+  * rewrite -> H0.
+  simpl. auto.
+Qed.
+
+
+Theorem DownloadACKInit : forall (sender : N) (st : state) (data : message), fsm st = waiting_for_init_ack -> Satisfies (process_step_download (incoming (Serialize (DATA 1 data)) sender)) st (fun s => Sends (ACK 1) sender s /\ (N.of_nat (String.length data) < 512 \/ fsm s = waiting_for_next_packet sender 2)).
+  intros.
+  usat.
+  unfold ParseMessage.
+  rewrite SerializationCorrectness4.
+  rewrite LiftOptSome.
+  rewrite H.
+  unfold handle_incoming_data.
+  simpl. mbind.
+  unfold SetFSM. simpl.
+  remember (N.of_nat (String.length data) <? 512) as last'.
+  destruct last'.
+  * simpl.
+    unfold Sends. simpl.
+    constructor.
+    ** auto.
+    ** left. apply N.ltb_lt. auto.
+  * unfold Sends. simpl.
+    constructor.
+    ** auto.
+    ** right. trivial.
+  * zify; omega.
 Qed.
