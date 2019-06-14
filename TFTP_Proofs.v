@@ -5,6 +5,7 @@ Require Import Ascii.
 Require Import List.
 Require String.
 Require Import Coq.Numbers.Natural.Abstract.NDiv.
+Require Import Coq.Arith.PeanoNat.
 
 (* Require Import Binding. *)
 Set Implicit Arguments.
@@ -326,28 +327,6 @@ Ltac urun := unfold Run; unfold option_map.
 Ltac ufail := unfold Fail'; unfold Fail.
 Ltac ufails := unfold Fails; unfold Run; unfold option_map; trivial.
 
-(* Definition DoesNotReach (prop : state -> Prop) (m : serverM unit) (st : state) : Prop := Fails m st \/ Satisfies m st (fun s => ~ prop s). *)
-
-(* Lemma AnyMessage : forall (m : message) (s : state), ParseMessage m s = None \/ exists (msg : TFTPMessage), ParseMessage m s = Some (s, msg). *)
-(*   intros. *)
-(*   unfold ParseMessage; unfold LiftOption. unfold Deserialize. *)
-(*   destruct m. *)
-(*   * simpl. auto. *)
-(*   * destruct m. *)
-(*   - simpl. auto. *)
-(*   - simpl.  *)
-
-(* Theorem DownloadNeverReadsFile : forall (e : input_event) (st : state), DoesNotReach (RequestsRead) (process_step_download e) st. *)
-(*   intros. *)
-(*   unfold process_step_download. *)
-(*   destruct e. *)
-(*   * unfold DoesNotReach. *)
-(*     ** mbind. *)
-       
-(*     destruct st. destruct fsm. cbn. *)
-(*   * ufail. unfold DoesNotReach. left. ufails. *)
-(*   * ufail. unfold DoesNotReach. left. ufails. *)
-
 Lemma LiftOptSome (T : Set) : forall (x:T) (st : state), LiftOption (Some x) st = Some (st, x).
   intros.
   simpl. trivial.
@@ -618,3 +597,162 @@ Theorem DownloadTimeoutDoesNotChangeFSM :
     cbn.
     trivial.
 Qed.
+
+Fixpoint ExtractRead (al : list action) : (list action * bool) :=
+  match al with
+  | a :: t =>
+    match a with
+    | request_read => (t, true)
+    | _ => let (t', b) := ExtractRead t in (a :: t', b)
+    end
+  | [] => ([], false)
+  end.
+
+Fixpoint HandleReads (data : list message) (m : serverM unit) : serverM unit :=
+  fun st => match m st with
+         | Some m' =>
+           let (st', _) := m' in
+           let (al', wantsread) := ExtractRead (actions st') in
+           let st'' := HelperSetActions al' st' in
+           if wantsread then
+             match data with
+             | d :: t => HandleReads t (process_step_upload (read d)) st''
+             | [] => process_step_upload (read EmptyString) st''
+             end
+           else
+             Some (st'', tt)
+         | None => None
+         end.
+
+Theorem UploadReplyToInit :
+  forall (sender : N) (st : state) (data : message),
+    actions st = [] ->
+    fsm st = waiting_for_init_ack ->
+    Satisfies
+      (HandleReads [data] (process_step_upload (incoming (Serialize (ACK 0)) sender)))
+      st
+      (fun s => Sends (DATA 1 data) sender s /\ ((N.of_nat (String.length data) < 512 /\ fsm s = waiting_for_last_ack sender 1) \/ fsm s = waiting_for_next_packet sender 1)).
+  intros.
+  usat.
+  parse.
+  rewrite LiftOptSome.
+  rewrite H0.
+  simpl.
+  remember (N.of_nat (String.length data) <? block_size) as last'.
+  destruct last'.
+  * simpl.
+    rewrite H. simpl.
+    unfold Sends. unfold HelperSetActions; simpl.
+    constructor.
+    ** auto.
+    ** left.
+       constructor.
+       apply N.ltb_lt.
+       auto.
+       trivial.
+  * simpl.
+    rewrite H. simpl.
+    unfold Sends. unfold HelperSetActions; simpl.
+    constructor.
+    ** auto.
+    ** auto.
+  * simpl. zify. omega.
+Qed.
+
+Theorem UploadSendData :
+  forall (sender : N) (b : N) (st : state) (data : message),
+    fsm st = waiting_for_next_packet sender b ->
+    actions st = [] ->
+    b > 1 ->
+    b < 256 * 256 ->
+    Satisfies
+      (HandleReads [data] (process_step_upload (incoming (Serialize (ACK b)) sender)))
+      st
+      (fun s => Sends (DATA (b + 1) data) sender s /\ ((N.of_nat (String.length data) < 512 /\ fsm s = waiting_for_last_ack sender (b + 1)) \/ fsm s = waiting_for_next_packet sender (b + 1))).
+  intros.
+  usat.
+  parse.
+  rewrite LiftOptSome.
+  rewrite H.
+  repeat rewrite IfEq.
+  unfold handle_incoming_data.
+  mbind.
+  unfold SetFSM. simpl.
+  remember (N.of_nat (String.length data) <? block_size) as last'.
+  destruct last'.
+  * simpl.
+    unfold Sends.
+    rewrite H0.
+    simpl.
+    constructor.
+    ** auto.
+    ** left.
+       constructor.
+       apply N.ltb_lt.
+       auto.
+       auto.
+  * simpl.
+    unfold Sends.
+    rewrite H0.
+    simpl.
+    constructor.
+    ** auto.
+    ** right.
+       trivial.
+  * trivial.
+Qed.
+
+Theorem UploadResendOnTimeout3Times :
+  forall (sender : N) (st : state) (m : TFTPMessage),
+    TFTPMessageIsValid m ->
+    previousMessage st = Some (Serialize m, sender) ->
+    retries st < 3 ->
+    Satisfies
+      (process_step_upload (timeout))
+      st
+      (Sends m sender).
+  intros.
+  usat.
+  unfold retry_after_timeout.
+  mbind.
+  assert (retries st <? 3 = true).
+  * apply N.ltb_lt. trivial.
+  * rewrite H2.
+    unfold GetPreviousMessage.
+    mbind.
+    rewrite H0.
+    rewrite LiftOptSome.
+    unfold Send'. unfold DoAction. simpl.
+    unfold Sends. simpl. auto.
+Qed.
+
+Theorem UploadFailAfter3rdTimeout :
+  forall (st : state),
+    retries st >= 3 ->
+    Satisfies
+      (process_step_upload timeout)
+      st
+      Terminates.
+  intros.
+  usat.
+  unfold retry_after_timeout.
+  mbind.
+  assert (~(retries st <? 3 = true)).
+  * rewrite N.ltb_lt.
+    zify; omega.
+  * assert (retries st <? 3 = false).
+    destruct (retries st <? 3).
+    ** exfalso. auto.
+    ** trivial.
+    ** rewrite H1.
+       unfold Terminates. simpl. auto.
+Qed.
+
+(* Theorem DonwloadTerminatesOnFinish1 : *)
+(*   forall (sender : N) (st : state) (data : message), *)
+(*     fsm st = waiting_for_init_ack -> *)
+(*     (N.of_nat (String.length data) < 512) -> *)
+(*     Satisfies *)
+(*       (process_step_download (incoming (Serialize (DATA 1 data)) sender)) *)
+(*       st *)
+(*       Terminates. *)

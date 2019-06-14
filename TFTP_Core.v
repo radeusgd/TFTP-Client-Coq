@@ -95,8 +95,10 @@ Definition GetPreviousMessage : serverM (message * N) :=
   LiftOption pm.
 Definition SetPreviousMessage (pm : message) (ps : N) : serverM unit :=
   fun s => Some (mkState (fsm s) (Some (pm, ps)) (mytid s) (actions s) (retries s), tt).
+Definition HelperSetActions (al : list action) (s : state) : state :=
+  mkState (fsm s) (previousMessage s) (mytid s) al (retries s).
 Definition DoAction (a : action) : serverM unit :=
-  fun s => Some (mkState (fsm s) (previousMessage s) (mytid s) (a :: actions s) (retries s), tt).
+  fun s => Some (HelperSetActions (a :: actions s) s, tt).
 Definition Send' (msg : message) (to : N) : serverM unit :=
   DoAction (send msg to).
 Definition Write (data : string) : serverM unit := DoAction (write data).
@@ -381,7 +383,7 @@ Definition process_step_upload (event : input_event) : serverM unit :=
         if incomingblockid =? lastblockid then
           PrintLn "Upload complete";; Terminate
         else if incomingblockid <? lastblockid then
-          Return tt (* probably earlier ACK has been retransmitted, so we ignore it *)
+          Return tt (* probably earlier ACK has been retransmission has been reordered, so we ignore it *)
         else
           FailWith IllegalTFTPOperation "Unexpected block id (too big)" sender
       | ERROR _ msg => PrintLn ("remote error: " ++ msg);; Terminate
@@ -434,7 +436,7 @@ Definition process_step_download (event : input_event) : serverM unit :=
            if incomingblockid =? expectedblockid then
              handle_incoming_data sender incomingblockid data
            else if incomingblockid <? expectedblockid then
-             Return tt (* probably earlier block has been retransmitted, so we ignore it *)
+             Return tt (* probably earlier block retransmission has been reordered, so we ignore it *)
            else
              FailWith IllegalTFTPOperation "Unexpected block id (too big)" sender (* received a future block id, but this shouldn't happen in interleaved DATA-ACK scheme, so it must be an error *)
          | ERROR _ msg => PrintLn ("remote error: " ++ msg);; Terminate
