@@ -116,7 +116,7 @@ let main =
   Random.self_init(); (* initialize randomness *)
   let (ip, port, transfer) = parse_args() in
   let tid = assign_random_TID () in
-  Printf.eprintf "Connecting to %s:%d, my tid is %d\n%!" ip port tid;
+  (* Printf.eprintf "Connecting to %s:%d, my tid is %d\n%!" ip port tid; *)
   let sockfd = create_udp_socket tid in
   let filefd = match transfer with
     | Upload fname -> openfile fname [O_RDONLY] 0o664
@@ -132,20 +132,20 @@ let main =
     match action with
     | Terminate -> Printf.eprintf "quitting\n"; exit 0
     | Write data ->
-      Printf.eprintf "write %d bytes\n%!" (Bytes.length data);
+      (* Printf.eprintf "write %d bytes\n%!" (Bytes.length data); *)
       let _ = Unix.write filefd data 0 (Bytes.length data) in
       false
     | RequestRead -> true
     | Print msg -> Printf.printf "%s\n%!" msg; false
     | Send (msg, port) ->
-      Printf.eprintf "sending '%s' to %d\n%!" (escaped (Bytes.to_string msg)) port;
+      (* Printf.eprintf "sending '%s' to %d\n%!" (escaped (Bytes.to_string msg)) port; *)
       let toaddr = make_addr port in
       sock_send sockfd toaddr msg;
       false
   in
   let rec
     receive state =
-      Printf.eprintf "waiting for reply\n%!";
+      (* Printf.eprintf "waiting for reply\n%!"; *)
       let buf = Bytes.create max_packet_len in
       try
         let (recvd, sender) = sock_recv sockfd buf in
@@ -157,10 +157,11 @@ let main =
             loop (process_step Timeout state))
           else
             let msg = Bytes.sub buf 0 recvd in
-            (Printf.eprintf "received '%s' from %d\n%!" (escaped (Bytes.to_string msg)) fromport;
+            (
+              (* Printf.eprintf "received '%s' from %d\n%!" (escaped (Bytes.to_string msg)) fromport; *)
             loop (process_step (Incoming (msg, fromport)) state))
       with Unix.Unix_error (Unix.EAGAIN, "recvfrom", _) ->
-        Printf.eprintf "Timed out\n%!";
+        (* Printf.eprintf "Timed out\n%!"; *)
         loop (process_step Timeout state)
   and
     read_file state =
