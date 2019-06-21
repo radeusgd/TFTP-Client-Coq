@@ -94,40 +94,6 @@ Lemma ParseNullTerminatedStringCorrectness2 : forall pref : string, ParseNullTer
 
 Admitted.
 
-(* We cannot prove serialization at once, because as for DATA and ACK it works only for messages that contain integers <= 65535 and the general datatype doesn't provide that, instead we'll prove specific instances *)
-(* Theorem SerializationCorrectness : forall m : TFTPMessage, Deserialize (Serialize m) = Some m. *)
-(*   intros. *)
-(*   induction m; unfold Serialize; unfold Deserialize. *)
-(*   * simpl. unfold OptBind. *)
-(*     rewrite -> ParseNullTerminatedStringCorrectness. *)
-(*     simpl. *)
-(*     trivial. *)
-(*   * simpl. unfold OptBind. *)
-(*     rewrite -> ParseNullTerminatedStringCorrectness. *)
-(*     simpl. *)
-(*     trivial. *)
-(*   * unfold OptBind. *)
-(*     assert (null = String zero EmptyString). *)
-(*   - auto. *)
-(*   - rewrite -> H. *)
-(*     simpl. *)
-(*     rewrite -> ParseNullTerminatedStringCorrectness. *)
-(*     simpl. *)
-(*     repeat f_equal. *)
-(*     repeat rewrite -> N_ascii_embedding. *)
-(*     zify. admit. *)
-
-    
-  
-(*   admit. *)
-(* Admitted. (* TODO *) *)
-
-(* Inductive TFTPMessage : Set *)
-(*   := RRQ (filename : string) *)
-(*    | WRQ (filename : string) *)
-(*    | ERROR (code : ErrorCode) (message : string) *)
-(*    | DATA (block : N) (data : string) *)
-(*    | ACK (block : N). *)
 Theorem SerializationCorrectness1 : forall f : string, Deserialize (Serialize (RRQ f)) = Some (RRQ f).
   intros.
   unfold Serialize; unfold Deserialize.
@@ -748,11 +714,25 @@ Theorem UploadFailAfter3rdTimeout :
        unfold Terminates. simpl. auto.
 Qed.
 
-(* Theorem DonwloadTerminatesOnFinish1 : *)
-(*   forall (sender : N) (st : state) (data : message), *)
-(*     fsm st = waiting_for_init_ack -> *)
-(*     (N.of_nat (String.length data) < 512) -> *)
-(*     Satisfies *)
-(*       (process_step_download (incoming (Serialize (DATA 1 data)) sender)) *)
-(*       st *)
-(*       Terminates. *)
+Theorem UploadTerminatesOnFinish1 :
+  forall (sender : N) (st : state) (blockid : N),
+    blockid < 256 * 256 ->
+    fsm st = waiting_for_last_ack sender blockid ->
+    Satisfies
+      (process_step_upload (incoming (Serialize (ACK blockid)) sender))
+      st
+      Terminates.
+  intros.
+  usat.
+  parse.
+  rewrite LiftOptSome.
+  rewrite H0.
+  assert (blockid =? blockid = true) as HEQ.
+  ** rewrite N.eqb_eq. trivial.
+  ** rewrite HEQ.
+     unfold Terminates.
+     simpl.
+     auto.
+
+ ** tftpmessagevalid.
+Qed.
